@@ -1,9 +1,9 @@
 {
   "domain": "homingai_chat",
   "name": "HomingAI Chat",
-  "documentation": "https://github.com/yourusername/ha-homingai-chat",
-  "dependencies": [],
-  "codeowners": ["@yourusername"],
+  "documentation": "https://github.com/aiakit/chat",
+  "dependencies": ["frontend", "lovelace"],
+  "codeowners": ["@aiakit"],
   "requirements": [],
   "version": "1.0.0",
   "config_flow": true,
