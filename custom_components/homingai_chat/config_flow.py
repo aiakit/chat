@@ -39,13 +39,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # 只在首次加载或没有code时获取授权URL
         if not hasattr(self, 'code') or not self.code:
             try:
-              
                 async with aiohttp.ClientSession() as session:
-                    request_data = {}
-                    
                     async with session.post(
                         "https://api.homingai.com/ha/home/oauthcode",
-                        json=request_data
+                        json={}
                     ) as response:
                         result = await response.json()
                         if result.get("code") == 200:
@@ -61,11 +58,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if hasattr(self, 'code') and self.code:
             auth_url = f"https://homingai.com/oauth?code={self.code}&state={self.state}"
 
+        # 如果用户点击了提交按钮
         if user_input is not None:
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
-                         "https://api.homingai.com/ha/home/gettoken",
+                        "https://api.homingai.com/ha/home/gettoken",
                         json={
                             "code": self.code,
                             "state": self.state
@@ -96,6 +94,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 4. 为了用户能够稳定地使用集成，避免接口被滥用，此集成仅允许在 Home Assistant 使用，详情请参考LICENSE。
 
+请点击下方的提交按钮，然后在打开的网页中完成授权：
 [点击此处去HomingAI官网授权]({auth_url})
 """
 

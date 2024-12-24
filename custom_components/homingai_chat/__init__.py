@@ -21,7 +21,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async_register_built_in_panel(
         hass,
         "iframe",
-        "HomingAI Chat",
+        "HomingAI",
         "mdi:chat",
         DOMAIN,
         {
