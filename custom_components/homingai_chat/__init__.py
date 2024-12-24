@@ -22,7 +22,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass,
         "iframe",
         "HomingAI",
-        "mdi:chat",
+        "mdi:robot",
         DOMAIN,
         {
             "url": f"https://homingai.com/chat?access_token={entry.data.get('access_token', '')}",
