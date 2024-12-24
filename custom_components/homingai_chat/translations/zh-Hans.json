@@ -2,7 +2,11 @@
     "config": {
         "step": {
             "user": {
-                "description": "{risks}\n\n[点击此处完成授权]({auth_url})",
+                "description": "{risks}",
+                "data": {
+                    "submit": "授权完成",
+                    "cancel": "去授权"
+                },
                 "title": "HomingAI Chat"
             }
         },

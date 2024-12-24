@@ -158,12 +158,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional("cancel", description="去授权"): bool,
         })
 
-        return self.async_show_form(
-            step_id="user",
-            data_schema=schema,
-            errors=errors,
-            description_placeholders={
-                "risks": f"""
+        risks_text = """
 请注意以下风险提示：
 
 1. 您的用户信息和设备信息将会存储在您的 Home Assistant 系统中，我们无法保证 Home Assistant 存储机制的安全性。您需要负责防止您的信息被窃取。
@@ -174,7 +169,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 4. 为了用户能够稳定地使用集成，避免接口被滥用，此集成仅允许在 Home Assistant 使用，详情请参考LICENSE。
 
-<a href="{auth_url}" target="_blank">点击此处去授权</a>
+[点击此处完成授权]({auth_url})
 """
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "risks": risks_text.format(auth_url=auth_url) if auth_url else risks_text
             }
         )
