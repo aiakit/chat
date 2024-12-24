@@ -3,16 +3,10 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-import voluptuous as vol
 import aiohttp
-from urllib.parse import urlparse
-import webbrowser
 
 from homeassistant import config_entries
-from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.network import get_url
 
 from .const import DOMAIN
 
