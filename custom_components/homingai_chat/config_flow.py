@@ -1,4 +1,4 @@
-"""Config flow for HomingAI Chat integration."""
+"""Config flow for HomingAI integration."""
 from __future__ import annotations
 
 import logging
@@ -8,13 +8,13 @@ import aiohttp
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 
-from .const import DOMAIN
+from .const import DOMAIN,TITLE
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for HomingAI Chat."""
+    """Handle a config flow for HomingAI"""
 
     VERSION = 1
 
@@ -66,7 +66,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         result = await response.json()
                         if result.get("code") == 200:
                             return self.async_create_entry(
-                                title="HomingAI Chat",
+                                title=TITLE,
                                 data={
                                     "access_token": result["data"]["access_token"]
                                 }
