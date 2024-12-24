@@ -1,0 +1,17 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "description": "{risks}\n\n[点击此处完成授权]({auth_url})",
+                "title": "HomingAI Chat"
+            }
+        },
+        "error": {
+            "auth_error": "获取授权码失败，请重试",
+            "auth_verify_failed": "授权验证失败，请重试"
+        },
+        "abort": {
+            "already_configured": "此账号已经配置过了"
+        }
+    }
+} 
