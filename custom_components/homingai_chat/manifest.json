@@ -1,11 +1,29 @@
 {
   "domain": "homingai_chat",
   "name": "HomingAI Chat",
-  "documentation": "https://github.com/aiakit/chat",
-  "dependencies": ["frontend", "lovelace"],
-  "codeowners": ["@aiakit"],
-  "requirements": [],
-  "version": "1.0.1",
+  "version": "1.0.0",
+  "documentation": "https://www.homingai.com",
+  "dependencies": ["frontend", "http", "websocket_api"],
+  "codeowners": ["@homingai"],
   "config_flow": true,
-  "iot_class": "cloud_polling"
-} 
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "homeassistant": "2023.8.0",
+  "permissions": ["microphone"],
+  "webview_external_urls": [
+    "https://homingai.com",
+    "https://*.homingai.com",
+    "https://api.homingai.com",
+    "http://localhost:*",
+    "http://127.0.0.1:*"
+  ],
+  "webview_permissions": {
+    "microphone": [
+      "https://homingai.com",
+      "https://*.homingai.com",
+      "https://api.homingai.com",
+      "http://localhost:*",
+      "http://127.0.0.1:*"
+    ]
+  }
+}

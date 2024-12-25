@@ -7,8 +7,10 @@ import aiohttp
 
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import config_validation as cv
+from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN,TITLE
+from .const import DOMAIN, TITLE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,6 +24,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize flow."""
         self.code = None
         self.state = None
+
+    @property
+    def data_schema(self):
+        """Return the data schema."""
+        return {}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -87,6 +94,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 3. 在使用此集成前，请仔细阅读README。
 
 4. 为了用户能够稳定地使用集成，避免接口被滥用，此集成仅允许在 Home Assistant 使用，详情请参考LICENSE。
+
+5. 此集成需要使用麦克风权限，请确保已授予相关权限。
 
 请点击下方的提交按钮，然后在打开的网页中完成授权：
 [点击此处去HomingAI官网授权]({auth_url})
