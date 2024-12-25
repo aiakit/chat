@@ -1,22 +1,14 @@
 """The HomingAI Chat integration."""
 import logging
-import asyncio
 import aiohttp
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.components.frontend import async_register_built_in_panel
 from homeassistant.components.http import HomeAssistantView
-import homeassistant.helpers.config_validation as cv
-import voluptuous as vol
 
-from .const import DOMAIN, SERVICE_VOICE_CHAT
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
-
-# 服务schema定义
-VOICE_CHAT_SCHEMA = vol.Schema({
-    vol.Required("audio_data"): cv.string,
-})
 
 class HomingAIChatView(HomeAssistantView):
     """Handle HomingAI Chat web interface."""
@@ -35,6 +27,7 @@ class HomingAIChatView(HomeAssistantView):
                 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
                 <meta name="mobile-web-app-capable" content="yes">
                 <meta name="apple-mobile-web-app-capable" content="yes">
+                <meta name="apple-mobile-web-app-status-bar-style" content="black">
                 <title>HomingAI Chat</title>
                 <style>
                     body, html {{
@@ -43,6 +36,7 @@ class HomingAIChatView(HomeAssistantView):
                         height: 100%;
                         width: 100%;
                         overflow: hidden;
+                        -webkit-overflow-scrolling: touch;
                     }}
                     iframe {{
                         width: 100%;
@@ -59,24 +53,52 @@ class HomingAIChatView(HomeAssistantView):
             <body>
                 <iframe 
                     src="https://homingai.com/chat"
-                    allow="microphone; camera; fullscreen; display-capture; clipboard-read; clipboard-write; geolocation; web-share"
-                    sandbox="allow-forms allow-popups allow-pointer-lock allow-same-origin allow-scripts allow-modals allow-downloads allow-presentation allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
+                    allow="microphone; camera; autoplay; fullscreen"
+                    sandbox="allow-forms allow-popups allow-same-origin allow-scripts allow-modals"
+                    webkit-playsinline
+                    playsinline
                 ></iframe>
                 <script>
-                    // 处理iframe通信
+                    function isIOS() {{
+                        return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+                    }}
+
+                    function requestMicrophoneAccess() {{
+                        return navigator.mediaDevices.getUserMedia({{
+                            audio: {{
+                                echoCancellation: true,
+                                noiseSuppression: true,
+                                autoGainControl: true
+                            }}
+                        }});
+                    }}
+
+                    if (isIOS()) {{
+                        // iOS 设备上的特殊处理
+                        document.addEventListener('touchstart', function() {{
+                            requestMicrophoneAccess()
+                                .then(function(stream) {{
+                                    stream.getTracks().forEach(track => track.stop());
+                                    console.log('Microphone access granted');
+                                }})
+                                .catch(function(error) {{
+                                    console.error('Microphone access error:', error);
+                                }});
+                        }}, {{once: true}});
+                    }}
+
                     window.addEventListener('message', function(event) {{
                         if (event.origin === 'https://homingai.com') {{
-                            // 处理来自iframe的消息
                             if (event.data.type === 'requestMicrophonePermission') {{
-                                navigator.mediaDevices.getUserMedia({{ audio: true }})
+                                requestMicrophoneAccess()
                                     .then(function(stream) {{
-                                        document.querySelector('iframe').contentWindow.postMessage({{
+                                        event.source.postMessage({{
                                             type: 'microphonePermissionGranted',
                                             stream: stream
                                         }}, '*');
                                     }})
                                     .catch(function(error) {{
-                                        document.querySelector('iframe').contentWindow.postMessage({{
+                                        event.source.postMessage({{
                                             type: 'microphonePermissionDenied',
                                             error: error.message
                                         }}, '*');
@@ -115,66 +137,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }
     )
 
-    # 注册语音聊天服务
-    async def handle_voice_chat(call: ServiceCall):
-        """处理语音聊天服务调用."""
-        audio_data = call.data["audio_data"]
-        
-        try:
-            async with aiohttp.ClientSession() as session:
-                # 发送音频数据到语音识别服务
-                async with session.post(
-                    "https://api.homingai.com/ha/home/stt",
-                    data=audio_data,
-                    headers={
-                        "Content-Type": "audio/wav",
-                        "Authorization": f"Bearer {entry.data.get('access_token')}"
-                    }
-                ) as response:
-                    result = await response.json()
-                    
-                    if result.get("code") == 200:
-                        text = result.get("text", "")
-                        if text:
-                            # 发送识别出的文本到聊天服务
-                            async with session.post(
-                                "https://api.homingai.com/ha/home/chat",
-                                json={"content": text},
-                                headers={
-                                    "Authorization": f"Bearer {entry.data.get('access_token')}"
-                                }
-                            ) as chat_response:
-                                chat_result = await chat_response.json()
-                                if chat_result.get("code") == 200:
-                                    return chat_result.get("msg", "")
-                                else:
-                                    _LOGGER.error("Chat error: %s", chat_result)
-                                    raise Exception("Chat failed")
-                        else:
-                            raise Exception("No text recognized")
-                    else:
-                        _LOGGER.error("STT error: %s", result)
-                        raise Exception("Speech recognition failed")
-                        
-        except Exception as err:
-            _LOGGER.error("Voice chat error: %s", err)
-            raise Exception(f"Voice chat failed: {err}")
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_VOICE_CHAT,
-        handle_voice_chat,
-        schema=VOICE_CHAT_SCHEMA
-    )
-
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if DOMAIN in hass.data:
-        # 移除服务
-        hass.services.async_remove(DOMAIN, SERVICE_VOICE_CHAT)
-        
         # 移除面板
         hass.components.frontend.async_remove_panel(DOMAIN)
         if entry.entry_id in hass.data[DOMAIN]:

@@ -13,17 +13,26 @@
   "webview_external_urls": [
     "https://homingai.com",
     "https://*.homingai.com",
-    "https://api.homingai.com",
-    "http://localhost:*",
-    "http://127.0.0.1:*"
+    "https://api.homingai.com"
   ],
   "webview_permissions": {
     "microphone": [
       "https://homingai.com",
       "https://*.homingai.com",
-      "https://api.homingai.com",
-      "http://localhost:*",
-      "http://127.0.0.1:*"
+      "https://api.homingai.com"
     ]
+  },
+  "mobile_app": {
+    "ios": {
+      "permissions": {
+        "NSMicrophoneUsageDescription": "需要使用麦克风进行语音对话",
+        "NSCameraUsageDescription": "需要使用相机进行视频对话"
+      },
+      "webview": {
+        "allowsInlineMediaPlayback": true,
+        "mediaTypesRequiringUserActionForPlayback": "none",
+        "allowsMicrophoneAccess": true
+      }
+    }
   }
 }
