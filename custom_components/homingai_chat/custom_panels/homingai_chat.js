@@ -12,6 +12,10 @@ class HomingAIChat extends HTMLElement {
         
         const scriptPath = new URL(import.meta.url).pathname;
         this.basePath = scriptPath.substring(0, scriptPath.lastIndexOf('/'));
+        
+        // 添加音频控制相关属性
+        this.currentAudio = null;
+        this.isPlaying = false;
     }
 
     async connectedCallback() {
@@ -25,6 +29,10 @@ class HomingAIChat extends HTMLElement {
             }
         } catch (error) {
             console.error('Failed to get access token:', error);
+            // 添加错误提示
+            setTimeout(() => {
+                this.addMessage('无法获取授权信息，请检查配置或重新授权', 'bot');
+            }, 1000);
         }
         
         this.render();
@@ -37,28 +45,40 @@ class HomingAIChat extends HTMLElement {
 
         this.shadowRoot.innerHTML = `
             <style>
+                /* 基础样式 */
                 :host {
                     display: block;
-                    padding: 16px;
+                    width: 100%;
+                    height: 100vh;
+                    overflow: hidden;
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
                 }
 
                 .chat-container {
-                    max-width: 800px;
-                    margin: 0 auto;
-                    background: var(--card-background-color, #fff);
-                    border-radius: 12px;
-                    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
-                    height: calc(100vh - 120px);
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
                     display: flex;
                     flex-direction: column;
-                    overflow: hidden;
+                    background: #fff;
                 }
 
                 .chat-messages {
                     flex: 1;
                     overflow-y: auto;
+                    -webkit-overflow-scrolling: touch;
                     padding: 20px;
-                    scroll-behavior: smooth;
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 70px;
                     background: #fafafa;
                 }
 
@@ -141,13 +161,19 @@ class HomingAIChat extends HTMLElement {
                 }
 
                 .input-container {
-                    display: flex;
-                    padding: 16px 20px;
+                    position: fixed;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    height: 70px;
+                    background: #fff;
                     border-top: 1px solid rgba(0, 0, 0, 0.08);
+                    padding: 12px 16px;
+                    display: flex;
                     align-items: center;
-                    background: #ffffff;
-                    position: relative;
                     gap: 12px;
+                    z-index: 100;
+                    box-sizing: border-box;
                 }
 
                 .input-wrapper {
@@ -155,6 +181,7 @@ class HomingAIChat extends HTMLElement {
                     position: relative;
                     background: #f8f9fa;
                     transition: all 0.3s ease;
+                    border-radius: 8px;
                 }
 
                 .input-wrapper:focus-within {
@@ -166,6 +193,7 @@ class HomingAIChat extends HTMLElement {
                     width: 100%;
                     padding: 12px 16px;
                     border: 1px solid #e0e0e0;
+                    border-radius: 8px;
                     font-size: 15px;
                     line-height: 1.5;
                     color: #333;
@@ -173,6 +201,7 @@ class HomingAIChat extends HTMLElement {
                     transition: all 0.3s ease;
                     box-sizing: border-box;
                     outline: none;
+                    -webkit-appearance: none;
                 }
 
                 #messageInput:focus {
@@ -414,6 +443,334 @@ class HomingAIChat extends HTMLElement {
                 .chat-messages::-webkit-scrollbar-thumb:hover {
                     background: rgba(0, 0, 0, 0.2);
                 }
+
+                /* 添加媒体查询，针对移动设备 */
+                @media (max-width: 600px) {
+                    .chat-messages {
+                        padding: 15px;
+                        padding-bottom: 80px;
+                    }
+                    
+                    .input-container {
+                        padding: 8px 15px;
+                    }
+                }
+
+                /* 确保在虚拟键盘弹出时内容不会被压缩 */
+                @supports (-webkit-touch-callout: none) {
+                    :host {
+                        height: -webkit-fill-available;
+                    }
+                    
+                    .chat-container {
+                        height: -webkit-fill-available;
+                    }
+                    
+                    .input-container {
+                        padding-bottom: calc(10px + env(safe-area-inset-bottom));
+                    }
+                }
+
+                @supports (-webkit-touch-callout: none) {
+                    :host {
+                        height: -webkit-fill-available;
+                    }
+                    
+                    .chat-container {
+                        height: -webkit-fill-available;
+                    }
+                    
+                    .input-container {
+                        padding-bottom: calc(10px + env(safe-area-inset-bottom));
+                    }
+                    
+                    .chat-messages {
+                        bottom: calc(70px + env(safe-area-inset-bottom));
+                    }
+                }
+
+                @media (max-height: 400px) {
+                    .chat-messages {
+                        bottom: 70px;
+                    }
+                    
+                    .input-container {
+                        position: fixed;
+                    }
+                }
+
+                /* 虚拟键盘弹出时的处理 */
+                @media (max-height: 450px) {
+                    .chat-messages {
+                        padding-bottom: 70px;
+                    }
+                }
+
+                /* Web 端样式 */
+                @media (min-width: 768px) {
+                    :host {
+                        padding: 20px;
+                        background: #f5f5f5;
+                    }
+
+                    .chat-container {
+                        position: relative;
+                        width: 100%;
+                        max-width: 900px;
+                        height: calc(100vh - 40px);
+                        margin: 0 auto;
+                        border-radius: 16px;
+                        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+                        overflow: hidden;
+                    }
+
+                    .chat-messages {
+                        padding: 30px;
+                        bottom: 80px;
+                    }
+
+                    .input-container {
+                        position: absolute;
+                        width: 100%;
+                        max-width: 900px;
+                        left: 50%;
+                        transform: translateX(-50%);
+                        height: 80px;
+                        padding: 16px 30px;
+                        border-top: 1px solid rgba(0, 0, 0, 0.06);
+                        background: #fff;
+                    }
+
+                    .input-wrapper {
+                        flex: 1;
+                        background: #f8f9fa;
+                        border-radius: 12px;
+                        transition: all 0.3s ease;
+                    }
+
+                    #messageInput {
+                        width: 100%;
+                        height: 46px;
+                        padding: 0 16px;
+                        border: 1px solid #e0e0e0;
+                        border-radius: 12px;
+                        font-size: 16px;
+                        background: transparent;
+                        transition: all 0.3s ease;
+                    }
+
+                    #messageInput:focus {
+                        border-color: rgba(138, 43, 226, 0.3);
+                        box-shadow: 0 0 0 2px rgba(138, 43, 226, 0.1);
+                    }
+
+                    .action-button {
+                        width: 46px;
+                        height: 46px;
+                        min-width: 46px;
+                        border-radius: 12px;
+                        transition: all 0.3s ease;
+                    }
+
+                    .action-button:hover {
+                        transform: translateY(-1px);
+                        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+                    }
+
+                    /* 消息样式优化 */
+                    .message {
+                        max-width: 70%;
+                    }
+
+                    .message-content {
+                        padding: 14px 18px;
+                        border-radius: 16px;
+                        font-size: 15px;
+                        line-height: 1.5;
+                    }
+
+                    /* 滚动条样式 */
+                    .chat-messages::-webkit-scrollbar {
+                        width: 8px;
+                    }
+
+                    .chat-messages::-webkit-scrollbar-track {
+                        background: transparent;
+                    }
+
+                    .chat-messages::-webkit-scrollbar-thumb {
+                        background: rgba(0, 0, 0, 0.1);
+                        border-radius: 4px;
+                    }
+
+                    .chat-messages::-webkit-scrollbar-thumb:hover {
+                        background: rgba(0, 0, 0, 0.2);
+                    }
+                }
+
+                /* 大屏幕优化 */
+                @media (min-width: 1200px) {
+                    .chat-container {
+                        max-width: 1000px;
+                    }
+
+                    .input-container {
+                        max-width: 1000px;
+                    }
+
+                    .message {
+                        max-width: 60%;
+                    }
+                }
+
+                /* 移动端的基础样式 */
+                @media (max-width: 767px) {
+                    :host {
+                        position: fixed !important;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        width: 100%;
+                        height: 100%;
+                        overflow: hidden;
+                        background: #fff;
+                        display: flex;
+                        flex-direction: column;
+                    }
+
+                    .chat-container {
+                        position: fixed;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        width: 100%;
+                        height: 100%;
+                        display: flex;
+                        flex-direction: column;
+                        background: #fff;
+                        overflow: hidden; /* 防止容器滚动 */
+                    }
+
+                    .chat-messages {
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 60px; /* 输入框高度 */
+                        overflow-y: auto;
+                        -webkit-overflow-scrolling: touch;
+                        padding: 15px;
+                        background: #fafafa;
+                        z-index: 1;
+                    }
+
+                    .input-container {
+                        position: fixed;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        height: 60px;
+                        background: #fff;
+                        border-top: 1px solid rgba(0, 0, 0, 0.08);
+                        padding: 10px 15px;
+                        display: flex;
+                        align-items: center;
+                        gap: 12px;
+                        z-index: 2;
+                        box-sizing: border-box;
+                    }
+
+                    .input-wrapper {
+                        flex: 1;
+                        height: 40px;
+                        display: flex;
+                        align-items: center;
+                        background: #f8f9fa;
+                        border-radius: 8px;
+                    }
+
+                    #messageInput {
+                        width: 100%;
+                        height: 100%;
+                        padding: 0 12px;
+                        border: 1px solid #e0e0e0;
+                        border-radius: 8px;
+                        font-size: 15px;
+                        background: transparent;
+                    }
+
+                    .action-button {
+                        width: 40px;
+                        height: 40px;
+                        min-width: 40px;
+                        border-radius: 8px;
+                        padding: 0;
+                        flex-shrink: 0;
+                    }
+
+                    /* iOS 设备底部安全区域适配 */
+                    @supports (-webkit-touch-callout: none) {
+                        .chat-messages {
+                            bottom: calc(60px + env(safe-area-inset-bottom));
+                        }
+
+                        .input-container {
+                            height: calc(60px + env(safe-area-inset-bottom));
+                            padding-bottom: calc(10px + env(safe-area-inset-bottom));
+                        }
+                    }
+
+                    /* 虚拟键盘弹出时的处理 */
+                    @media (max-height: 450px) {
+                        .chat-messages {
+                            bottom: 50px;
+                        }
+                        
+                        .input-container {
+                            height: 50px;
+                        }
+                    }
+
+                    /* 消息样式优化 */
+                    .message {
+                        max-width: 85%;
+                        margin-bottom: 12px;
+                    }
+
+                    .message-content {
+                        padding: 12px 16px;
+                        border-radius: 16px;
+                        font-size: 15px;
+                        line-height: 1.4;
+                    }
+
+                    /* 录音波形动画容器固定位置 */
+                    .voice-wave-container {
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background: rgba(255, 255, 255, 0.95);
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        z-index: 3;
+                    }
+                }
+
+                /* 虚拟键盘弹出时的处理 */
+                @media (max-height: 450px) {
+                    .chat-messages {
+                        bottom: 60px;
+                    }
+                    
+                    .input-container {
+                        min-height: 50px;
+                    }
+                }
             </style>
 
             <div class="chat-container">
@@ -445,13 +802,25 @@ class HomingAIChat extends HTMLElement {
         const recordButton = this.shadowRoot.getElementById('recordButton');
         const inputContainer = this.shadowRoot.querySelector('.input-container');
 
+        // 添加全局点击事件监听，处理录音和播放
+        document.addEventListener('click', (e) => {
+            // 如果正在录音，则停止录音（不需要判断点击位置）
+            if (this.isRecording) {
+                this.stopRecording();
+            }
+            // 如果点击的不是播放按钮，则停止播放
+            if (!e.target.closest('.audio-play-button')) {
+                this.stopCurrentAudio();
+            }
+        });
+
         const sendMessage = () => {
             const message = input.value.trim();
             if (message) {
+                this.stopCurrentAudio(); // 发送消息前停止播放
                 this.addMessage(message, 'user');
                 input.value = '';
                 inputContainer.classList.remove('show-send');
-                
                 this.sendChatMessage(message, false);
             }
         };
@@ -463,6 +832,7 @@ class HomingAIChat extends HTMLElement {
             } else {
                 inputContainer.classList.remove('show-send');
             }
+            this.stopCurrentAudio(); // 输入时停止播放
         });
 
         sendButton.addEventListener('click', sendMessage);
@@ -472,25 +842,27 @@ class HomingAIChat extends HTMLElement {
             }
         });
 
-        // 录音相关事件监听
-        recordButton.addEventListener('click', () => this.toggleRecording());
-        document.addEventListener('click', (e) => {
-            if (this.isRecording && !recordButton.contains(e.target)) {
-                this.stopRecording();
+        // 录音按钮点击事件
+        recordButton.addEventListener('click', (e) => {
+            e.stopPropagation(); // 防止触发两次停止录音
+            this.stopCurrentAudio(); // 开始录音前停止播放
+            
+            // 如果没有在录音，则开始录音
+            if (!this.isRecording) {
+                this.startRecording();
             }
+            // 如果正在录音，全局点击事件会处理停止录音
         });
-    }
-
-    async toggleRecording() {
-        if (!this.isRecording) {
-            await this.startRecording();
-        } else {
-            await this.stopRecording();
-        }
     }
 
     async startRecording() {
         try {
+            // 如果已经在录音，先停止当前录音
+            if (this.isRecording) {
+                await this.stopRecording();
+                return;
+            }
+
             // 如果当前窗口不支持录音，尝试通过 iframe 取权限
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 await this.requestPermissionViaIframe();
@@ -542,7 +914,7 @@ class HomingAIChat extends HTMLElement {
             console.error('Iframe permission request failed:', error);
             if (error.name === 'SecurityError') {
                 // 如果是安全错误，可能需要用户手动授权
-                alert('请在系统设置中允许 Home Assistant 访问麦克风');
+                alert('请在系统设置允许 Home Assistant 访问麦克风');
             } else {
                 alert('无法获取麦克风权限，请确保设备支持录音功能');
             }
@@ -589,7 +961,7 @@ class HomingAIChat extends HTMLElement {
                 const sttResponse = await fetch('https://api.homingai.com/ha/home/stt', {
                     method: 'POST',
                     headers: {
-                        'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0aW1lc3RhbXAiOiIyMDI0LTEyLTI0VDE4OjA1OjE3KzA4OjAwIiwidXNlcl9pZCI6IjY3NGM3YzM0YzkwZjJmNmE1M2NiNWFkNSIsImlzcyI6ImhhIiwic3ViIjoiYXNzaXN0IG9wZW4iLCJhdWQiOlsiaGEgdXNlciJdLCJleHAiOjQ4NDU0MzQ3MTcsIm5iZiI6MTczNTAzNDcxNywiaWF0IjoxNzM1MDM0NzE3LCJqdGkiOiI3MGNmNjIzMC1mZmUzLTRmZGQtODAzYS0xMjhlZmExMWJhYTYifQ.n5k62EG59TwMCA825XAsl3Fs6cvTBSO9coJtnjljXhY',
+                        'Authorization': `Bearer ${this.access_token}`,
                         'Content-Type': 'audio/wav'
                     },
                     body: finalBlob
@@ -756,12 +1128,15 @@ class HomingAIChat extends HTMLElement {
 
     // 修改 sendChatMessage 方法
     async sendChatMessage(message, needTTS = false) {
+        // 停止当前正在播放的音频
+        this.stopCurrentAudio();
+        
         try {
             // 1. 发送聊天消息
             const chatResponse = await fetch('https://api.homingai.com/ha/home/chat', {
                 method: 'POST',
                 headers: {
-                    'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0aW1lc3RhbXAiOiIyMDI0LTEyLTI0VDE4OjA1OjE3KzA4OjAwIiwidXNlcl9pZCI6IjY3NGM3YzM0YzkwZjJmNmE1M2NiNWFkNSIsImlzcyI6ImhhIiwic3ViIjoiYXNzaXN0IG9wZW4iLCJhdWQiOlsiaGEgdXNlciJdLCJleHAiOjQ4NDU0MzQ3MTcsIm5iZiI6MTczNTAzNDcxNywiaWF0IjoxNzM1MDM0NzE3LCJqdGkiOiI3MGNmNjIzMC1mZmUzLTRmZGQtODAzYS0xMjhlZmExMWJhYTYifQ.n5k62EG59TwMCA825XAsl3Fs6cvTBSO9coJtnjljXhY',
+                    'Authorization': `Bearer ${this.access_token}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
@@ -776,16 +1151,14 @@ class HomingAIChat extends HTMLElement {
             const chatResult = await chatResponse.json();
             
             if (chatResult.code === 200 && chatResult.msg) {
-                // 显示文本消息
                 this.addMessage(chatResult.msg, 'bot');
 
-                // 只有在需要语音合成时才请求 TTS
                 if (needTTS) {
                     try {
                         const ttsResponse = await fetch('https://api.homingai.com/ha/home/tts', {
                             method: 'POST',
                             headers: {
-                                'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0aW1lc3RhbXAiOiIyMDI0LTEyLTI0VDE4OjA1OjE3KzA4OjAwIiwidXNlcl9pZCI6IjY3NGM3YzM0YzkwZjJmNmE1M2NiNWFkNSIsImlzcyI6ImhhIiwic3ViIjoiYXNzaXN0IG9wZW4iLCJhdWQiOlsiaGEgdXNlciJdLCJleHAiOjQ4NDU0MzQ3MTcsIm5iZiI6MTczNTAzNDcxNywiaWF0IjoxNzM1MDM0NzE3LCJqdGkiOiI3MGNmNjIzMC1mZmUzLTRmZGQtODAzYS0xMjhlZmExMWJhYTYifQ.n5k62EG59TwMCA825XAsl3Fs6cvTBSO9coJtnjljXhY',
+                                'Authorization': `Bearer ${this.access_token}`,
                                 'Content-Type': 'application/json'
                             },
                             body: JSON.stringify({
@@ -800,10 +1173,18 @@ class HomingAIChat extends HTMLElement {
                         const ttsResult = await ttsResponse.json();
 
                         if (ttsResult.code === 200 && ttsResult.body) {
-                            const audioData = this.base64ToBuffer(ttsResult.body);
-                            const audioBlob = new Blob([audioData], { type: 'audio/wav' });
-                            const audioUrl = URL.createObjectURL(audioBlob);
-                            this.playAudio(audioUrl);
+                            try {
+                                const audioData = this.base64ToBuffer(ttsResult.body);
+                                // 确保音频格式正确
+                                const audioBlob = new Blob([audioData], { 
+                                    type: 'audio/wav; codecs=1'  // 指定编解码器
+                                });
+                                const audioUrl = URL.createObjectURL(audioBlob);
+                                this.playAudio(audioUrl);
+                            } catch (error) {
+                                console.error('TTS audio processing error:', error);
+                                this.addMessage('语音处理失败: ' + error.message, 'bot');
+                            }
                         } else {
                             throw new Error('语音合成失败：' + (ttsResult.msg || '未知错误'));
                         }
@@ -830,28 +1211,113 @@ class HomingAIChat extends HTMLElement {
         return bytes.buffer;
     }
 
-    // 添加音频播放方法
+    // 修改 playAudio 方法
     playAudio(audioUrl) {
+        // 停止当前正在播放的音频
+        this.stopCurrentAudio();
+
         const audio = new Audio();
-        audio.src = audioUrl;
+        this.currentAudio = audio;
+        this.isPlaying = true;
         
-        // 音频加载完成后播放
-        audio.oncanplaythrough = () => {
-            audio.play().catch(error => {
-                console.error('Audio playback error:', error);
+        // 添加音频事件监听器
+        audio.addEventListener('error', (e) => {
+            console.error('Audio playback error:', {
+                error: e.target.error,
+                code: e.target.error.code,
+                message: e.target.error.message
             });
-        };
+            this.isPlaying = false;
+            this.addMessage('语音播放失败，点击播放按钮尝试手动播放', 'bot');
+            this.createPlayButton(audioUrl);
+        });
 
-        // 播放结束后清理资源
-        audio.onended = () => {
+        audio.addEventListener('ended', () => {
+            this.isPlaying = false;
+            this.currentAudio = null;
             URL.revokeObjectURL(audioUrl);
-        };
+        });
 
-        // 错误处理
-        audio.onerror = (error) => {
-            console.error('Audio error:', error);
-            URL.revokeObjectURL(audioUrl);
-        };
+        // iOS Safari 需要设置这些属性
+        audio.setAttribute('playsinline', 'true');
+        audio.setAttribute('webkit-playsinline', 'true');
+        audio.preload = 'auto';
+        audio.src = audioUrl;
+
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+            playPromise.catch(error => {
+                console.error('Autoplay failed:', error);
+                this.isPlaying = false;
+                this.createPlayButton(audioUrl);
+            });
+        }
+    }
+
+    // 修改 createPlayButton 方法
+    createPlayButton(audioUrl) {
+        const messagesContainer = this.shadowRoot.getElementById('messages');
+        const lastMessage = messagesContainer.lastElementChild;
+        
+        // 检查是否已经有播放按钮
+        if (lastMessage && lastMessage.querySelector('.audio-play-button')) {
+            return;
+        }
+
+        const playButton = document.createElement('button');
+        playButton.className = 'audio-play-button';
+        playButton.innerHTML = `
+            <span class="play-icon">▶</span>
+            <span class="play-text">点击播放语音</span>
+        `;
+
+        // 添加点击事件
+        playButton.addEventListener('click', async (e) => {
+            e.stopPropagation(); // 防止触发全局点击事件
+            
+            if (this.isPlaying && this.currentAudio) {
+                // 如果正在播放，则停止
+                this.stopCurrentAudio();
+                return;
+            }
+
+            const audio = new Audio();
+            this.currentAudio = audio;
+            this.isPlaying = true;
+
+            audio.setAttribute('playsinline', 'true');
+            audio.setAttribute('webkit-playsinline', 'true');
+            audio.src = audioUrl;
+
+            try {
+                await audio.play();
+                playButton.innerHTML = `
+                    <span class="play-icon">⏹</span>
+                    <span class="play-text">停止播放</span>
+                `;
+                playButton.style.opacity = '0.5';
+                
+                audio.onended = () => {
+                    this.isPlaying = false;
+                    this.currentAudio = null;
+                    playButton.innerHTML = `
+                        <span class="play-icon">▶</span>
+                        <span class="play-text">点击播放语音</span>
+                    `;
+                    playButton.style.opacity = '1';
+                    URL.revokeObjectURL(audioUrl);
+                };
+            } catch (error) {
+                console.error('Manual play failed:', error);
+                this.isPlaying = false;
+                this.currentAudio = null;
+                this.addMessage('语音播放失败，请检查设备音频设置', 'bot');
+            }
+        });
+
+        if (lastMessage) {
+            lastMessage.appendChild(playButton);
+        }
     }
 
     // 添加音频转换辅助方法
@@ -876,6 +1342,24 @@ class HomingAIChat extends HTMLElement {
             return await this.audioBufferToWav(renderedBuffer);
         } catch (error) {
             throw new Error('音频格式转换失败: ' + error.message);
+        }
+    }
+
+    // 添加音频控制方法
+    stopCurrentAudio() {
+        if (this.currentAudio) {
+            this.currentAudio.pause();
+            this.currentAudio.currentTime = 0;
+            this.isPlaying = false;
+            // 重置所有播放按钮的状态
+            const playButtons = this.shadowRoot.querySelectorAll('.audio-play-button');
+            playButtons.forEach(button => {
+                button.innerHTML = `
+                    <span class="play-icon">▶</span>
+                    <span class="play-text">点击播放语音</span>
+                `;
+                button.style.opacity = '1';
+            });
         }
     }
 }
