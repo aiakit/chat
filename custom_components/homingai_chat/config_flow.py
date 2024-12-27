@@ -4,13 +4,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 import aiohttp
+import os
 
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.helpers import config_validation as cv
-from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, TITLE
+from .const import DOMAIN,TITLE,ACCESS_TOKEN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,13 +24,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self.code = None
         self.state = None
 
-    @property
-    def data_schema(self):
-        """Return the data schema."""
-        return {}
-
     async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
+            self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle the initial step."""
         errors = {}
@@ -42,8 +36,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
-                        "https://api.homingai.com/ha/home/oauthcode",
-                        json={}
+                            "https://api.homingai.com/ha/home/oauthcode",
+                            json={}
                     ) as response:
                         result = await response.json()
                         if result.get("code") == 200:
@@ -64,18 +58,27 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
-                        "https://api.homingai.com/ha/home/gettoken",
-                        json={
-                            "code": self.code,
-                            "state": self.state
-                        }
+                            "https://api.homingai.com/ha/home/gettoken",
+                            json={
+                                "code": self.code,
+                                "state": self.state
+                            }
                     ) as response:
                         result = await response.json()
                         if result.get("code") == 200:
+                            # 保存 token 到文件
+                            token = result["data"]["access_token"]
+                            file_path = os.path.join(os.path.dirname(__file__), "custom_panels", "access_token.txt")
+                            try:
+                                with open(file_path, "w") as f:
+                                    f.write(token)
+                            except Exception as err:
+                                _LOGGER.error("Failed to save token to file: %s", err)
+                                
                             return self.async_create_entry(
                                 title=TITLE,
                                 data={
-                                    "access_token": result["data"]["access_token"]
+                                    ACCESS_TOKEN: token
                                 }
                             )
                         else:
@@ -94,8 +97,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 3. 在使用此集成前，请仔细阅读README。
 
 4. 为了用户能够稳定地使用集成，避免接口被滥用，此集成仅允许在 Home Assistant 使用，详情请参考LICENSE。
-
-5. 此集成需要使用麦克风权限，请确保已授予相关权限。
 
 请点击下方的提交按钮，然后在打开的网页中完成授权：
 [点击此处去HomingAI官网授权]({auth_url})

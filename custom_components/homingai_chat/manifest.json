@@ -1,38 +1,11 @@
 {
   "domain": "homingai_chat",
   "name": "HomingAI Chat",
-  "version": "1.0.0",
-  "documentation": "https://www.homingai.com",
-  "dependencies": ["frontend", "http", "websocket_api"],
-  "codeowners": ["@homingai"],
-  "config_flow": true,
-  "iot_class": "cloud_polling",
+  "documentation": "https://github.com/aiakit/chat",
+  "dependencies": ["http", "frontend"],
+  "codeowners": ["@aiakit"],
   "requirements": [],
-  "homeassistant": "2023.8.0",
-  "permissions": ["microphone"],
-  "webview_external_urls": [
-    "https://homingai.com",
-    "https://*.homingai.com",
-    "https://api.homingai.com"
-  ],
-  "webview_permissions": {
-    "microphone": [
-      "https://homingai.com",
-      "https://*.homingai.com",
-      "https://api.homingai.com"
-    ]
-  },
-  "mobile_app": {
-    "ios": {
-      "permissions": {
-        "NSMicrophoneUsageDescription": "需要使用麦克风进行语音对话",
-        "NSCameraUsageDescription": "需要使用相机进行视频对话"
-      },
-      "webview": {
-        "allowsInlineMediaPlayback": true,
-        "mediaTypesRequiringUserActionForPlayback": "none",
-        "allowsMicrophoneAccess": true
-      }
-    }
-  }
+  "version": "1.0.5",
+  "config_flow": true,
+  "iot_class": "local_polling"
 }

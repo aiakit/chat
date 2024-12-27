@@ -1,7 +1,4 @@
-"""Constants for the HomingAI Chat integration."""
-
+"""Constants for HomingAI Chat."""
 DOMAIN = "homingai_chat"
 TITLE = "HomingAI Chat"
-
-# Services
-SERVICE_VOICE_CHAT = "voice_chat"
+ACCESS_TOKEN = "access_token"
