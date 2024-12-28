@@ -31,7 +31,7 @@ HomingAI Chat 是一个 Home Assistant 自定义组件，提供智能语音对�
 
 1. 在 Home Assistant 的配置页面中添加集成
 2. 搜索 "HomingAI Chat"
-3. 按照提示完成HomingAI Chat的授权
+3. 按照提示完成HomingAI的授权
 4. 配置完成后，可以在侧边栏找到 HomingAI Chat 入口
 
 > 提示：点击上方按钮可以快速跳转到配置页面
