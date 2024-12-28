@@ -17,7 +17,7 @@ HomingAI Chat 是一个 Home Assistant 自定义组件，提供智能语音对�
 
 1. 确保已经安装了 [HACS](https://hacs.xyz/)
 2. HACS > 菜单 > Custom repositories
-3. 添加仓库：`https://github.com/your-username/homingai-chat`
+3. 添加仓库：`https://github.com/aiakit/homingai-chat`
 4. 类别选择：Integration
 5. 点击添加
 6. 在 HACS 集成页面搜索 "HomingAI Chat"
