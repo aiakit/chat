@@ -16,27 +16,35 @@ class HomingAIChat extends HTMLElement {
         // 添加音频控制相关属性
         this.currentAudio = null;
         this.isPlaying = false;
+        
+        // 添加分页相关属性
+        this.currentPage = 1;
+        this.pageSize = 20;
+        this.isLoading = false;
+        this.totalCount = 0;  // 添加总数记录
+        this.loadedCount = 0; // 添加已加载数量记录
     }
 
     async connectedCallback() {
-        // 读取 token 文件
         try {
             const response = await fetch(`${this.basePath}/access_token.txt`);
             if (response.ok) {
                 this.access_token = await response.text();
+                this.render();
+                this.initializeEventListeners();
+                // 获取授权后再加载历史消息
+                await this.loadHistoryMessages(true); // true表示初始加载
             } else {
                 throw new Error('Failed to load token file');
             }
         } catch (error) {
             console.error('Failed to get access token:', error);
-            // 添加错误提示
+            this.render();
+            this.initializeEventListeners();
             setTimeout(() => {
                 this.addMessage('无法获取授权信息，请检查配置或重新授权', 'bot');
             }, 1000);
         }
-        
-        this.render();
-        this.initializeEventListeners();
     }
 
     render() {
@@ -771,6 +779,52 @@ class HomingAIChat extends HTMLElement {
                         min-height: 50px;
                     }
                 }
+
+                .loading-tip, .error-tip {
+                    text-align: center;
+                    padding: 10px;
+                    color: #666;
+                    font-size: 14px;
+                }
+                
+                .error-tip {
+                    color: #ff4d4f;
+                }
+                
+                .pull-down-tip {
+                    text-align: center;
+                    padding: 10px;
+                    color: #666;
+                    font-size: 14px;
+                    opacity: 0;
+                    transition: opacity 0.3s;
+                }
+                
+                .pull-down-tip.visible {
+                    opacity: 1;
+                }
+
+                .remaining-tip {
+                    text-align: center;
+                    padding: 8px;
+                    color: #666;
+                    font-size: 12px;
+                    background: #f5f5f5;
+                    border-radius: 4px;
+                    margin: 8px 0;
+                }
+                
+                .pull-down-tip {
+                    text-align: center;
+                    padding: 10px;
+                    color: #666;
+                    font-size: 14px;
+                    opacity: 0.8;
+                }
+                
+                .pull-down-tip.visible {
+                    opacity: 1;
+                }
             </style>
 
             <div class="chat-container">
@@ -794,6 +848,13 @@ class HomingAIChat extends HTMLElement {
                 </div>
             </div>
         `;
+        
+        // 在消息容器前添加下拉提示
+        const messagesContainer = this.shadowRoot.querySelector('.chat-messages');
+        const pullDownTip = document.createElement('div');
+        pullDownTip.className = 'pull-down-tip';
+        pullDownTip.textContent = '下拉加载更多...';
+        messagesContainer.insertBefore(pullDownTip, messagesContainer.firstChild);
     }
 
     initializeEventListeners() {
@@ -852,6 +913,42 @@ class HomingAIChat extends HTMLElement {
                 this.startRecording();
             }
             // 如果正在录音，全局点击事件会处理停止录音
+        });
+
+        // 添加消息容器的滚动监听
+        const messagesContainer = this.shadowRoot.getElementById('messages');
+        let touchStartY = 0;
+        let pullDownTip = this.shadowRoot.querySelector('.pull-down-tip');
+        
+        messagesContainer.addEventListener('touchstart', (e) => {
+            if (messagesContainer.scrollTop === 0) {
+                touchStartY = e.touches[0].clientY;
+            }
+        });
+        
+        messagesContainer.addEventListener('touchmove', (e) => {
+            if (messagesContainer.scrollTop === 0) {
+                const touchY = e.touches[0].clientY;
+                const pull = touchY - touchStartY;
+                
+                if (pull > 50) {
+                    pullDownTip.classList.add('visible');
+                } else {
+                    pullDownTip.classList.remove('visible');
+                }
+            }
+        });
+        
+        messagesContainer.addEventListener('touchend', async (e) => {
+            if (messagesContainer.scrollTop === 0) {
+                const touchY = e.changedTouches[0].clientY;
+                const pull = touchY - touchStartY;
+                
+                if (pull > 50) {
+                    pullDownTip.classList.remove('visible');
+                    await this.loadHistoryMessages(true);
+                }
+            }
         });
     }
 
@@ -1028,26 +1125,43 @@ class HomingAIChat extends HTMLElement {
 
     addMessage(text, type) {
         const messagesContainer = this.shadowRoot.getElementById('messages');
-        const messageElement = document.createElement('div');
-        messageElement.classList.add('message', `${type}-message`);
-        
-        // 添加消息内容
-        const messageContent = document.createElement('div');
-        messageContent.classList.add('message-content');
-        messageContent.textContent = text;
-        messageElement.appendChild(messageContent);
-        
-        // 添加时间戳
-        const timestamp = document.createElement('div');
-        timestamp.classList.add('message-time');
-        timestamp.textContent = new Date().toLocaleTimeString('zh-CN', {
-            hour: '2-digit',
-            minute: '2-digit'
+        const messageElement = this.createMessageElement({
+            type,
+            content: text,
+            timestamp: new Date().toLocaleTimeString('zh-CN', {
+                hour: '2-digit',
+                minute: '2-digit'
+            })
         });
-        messageElement.appendChild(timestamp);
         
         messagesContainer.appendChild(messageElement);
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    // 添加创建消息元素的辅助方法
+    createMessageElement({ type, content, timestamp }) {
+        const messageElement = document.createElement('div');
+        // 根据 type 添加对应的样式类
+        messageElement.classList.add('message');
+        
+        // 用户消息靠右显示，机器人消息靠左显示
+        if (type === 'user') {
+            messageElement.classList.add('user-message');
+        } else {
+            messageElement.classList.add('bot-message');
+        }
+        
+        const messageContent = document.createElement('div');
+        messageContent.classList.add('message-content');
+        messageContent.textContent = content;
+        messageElement.appendChild(messageContent);
+        
+        const timestampElement = document.createElement('div');
+        timestampElement.classList.add('message-time');
+        timestampElement.textContent = timestamp;
+        messageElement.appendChild(timestampElement);
+        
+        return messageElement;
     }
 
     // 在组件销毁时清理 iframe
@@ -1151,6 +1265,10 @@ class HomingAIChat extends HTMLElement {
             const chatResult = await chatResponse.json();
             
             if (chatResult.code === 200 && chatResult.msg) {
+                const timestamp = new Date().toLocaleTimeString('zh-CN', {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
                 this.addMessage(chatResult.msg, 'bot');
 
                 if (needTTS) {
@@ -1360,6 +1478,102 @@ class HomingAIChat extends HTMLElement {
                 `;
                 button.style.opacity = '1';
             });
+        }
+    }
+
+    // 添加历史消息加载方法
+    async loadHistoryMessages(isInitial = false) {
+        if (this.isLoading || (!this.hasMore && !isInitial)) return;
+        
+        try {
+            this.isLoading = true;
+            const messagesContainer = this.shadowRoot.getElementById('messages');
+            
+            // 仅在非初始加载时显示加载提示
+            if (!isInitial) {
+                const loadingTip = document.createElement('div');
+                loadingTip.className = 'loading-tip';
+                loadingTip.textContent = '正在加载消息...';
+                messagesContainer.insertBefore(loadingTip, messagesContainer.firstChild);
+            }
+            
+            const response = await fetch('https://api.homingai.com/ha/home/message', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.access_token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    page_no: isInitial ? 1 : this.currentPage,
+                    page_size: this.pageSize
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`获取历史消息失败: ${response.status}`);
+            }
+
+            const result = await response.json();
+            
+            if (result.code === 200) {
+                // 移除加载提示
+                const loadingTip = this.shadowRoot.querySelector('.loading-tip');
+                if (loadingTip) {
+                    loadingTip.remove();
+                }
+                
+                // 更新总数
+                this.totalCount = result.data.total_count;
+                
+                if (isInitial) {
+                    // 清空现有消息和计数
+                    messagesContainer.innerHTML = '';
+                    this.currentPage = 1;
+                    this.loadedCount = 0;
+                }
+                
+                // 渲染消息
+                if (result.data.data && result.data.data.length > 0) {
+                    const fragment = document.createDocumentFragment();
+                    const scrollHeight = messagesContainer.scrollHeight;
+                    
+                    // 更新已加载数量
+                    this.loadedCount += result.data.data.length;
+                    
+                    result.data.data.reverse().forEach(msg => {
+                        const messageElement = this.createMessageElement({
+                            type: msg.message_type === 1 ? 'user' : 'bot',
+                            content: msg.content,
+                            timestamp: new Date(msg.created_at).toLocaleTimeString('zh-CN', {
+                                hour: '2-digit',
+                                minute: '2-digit'
+                            })
+                        });
+                        fragment.appendChild(messageElement);
+                    });
+                    
+                    if (isInitial) {
+                        messagesContainer.appendChild(fragment);
+                        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                    } else {
+                        messagesContainer.insertBefore(fragment, messagesContainer.firstChild);
+                        messagesContainer.scrollTop = messagesContainer.scrollHeight - scrollHeight;
+                    }
+                    
+                    this.currentPage++;
+                }
+            }
+        } catch (error) {
+            console.error('加载历史消息失败:', error);
+            const errorTip = document.createElement('div');
+            errorTip.className = 'error-tip';
+            errorTip.textContent = '加载历史消息失败，请重试';
+            this.shadowRoot.getElementById('messages').insertBefore(
+                errorTip,
+                this.shadowRoot.getElementById('messages').firstChild
+            );
+        } finally {
+            this.isLoading = false;
         }
     }
 }
