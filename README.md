@@ -11,6 +11,11 @@ HomingAI Chat 是一个 Home Assistant 自定义组件，提供智能语音对�
 - 📱 移动适配：完美支持移动端和桌面端访问
 - 🔒 安全可靠：使用授权token进行身份验证
 
+## 安装前准备
+1. 访问 [HomingAI 控制台](https://homingai.com/profile)
+2. 登录或注册 HomingAI 账号
+3. 在控制台页面授权你自己的homeassistant给HomingAI
+
 ## 安装方法
 
 ### HACS 安装
