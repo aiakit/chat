@@ -1153,7 +1153,8 @@ class HomingAIChat extends HTMLElement {
             if (chatResult.code === 200 && chatResult.msg) {
                 this.addMessage(chatResult.msg, 'bot');
 
-                if (needTTS) {
+                // 只有在需要TTS且文本长度不超过20个字符时才进行语音合成
+                if (needTTS && chatResult.msg.length <= 20) {
                     try {
                         const ttsResponse = await fetch('https://api.homingai.com/ha/home/tts', {
                             method: 'POST',
@@ -1175,9 +1176,8 @@ class HomingAIChat extends HTMLElement {
                         if (ttsResult.code === 200 && ttsResult.body) {
                             try {
                                 const audioData = this.base64ToBuffer(ttsResult.body);
-                                // 确保音频格式正确
                                 const audioBlob = new Blob([audioData], { 
-                                    type: 'audio/wav; codecs=1'  // 指定编解码器
+                                    type: 'audio/wav; codecs=1'
                                 });
                                 const audioUrl = URL.createObjectURL(audioBlob);
                                 this.playAudio(audioUrl);
