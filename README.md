@@ -13,27 +13,28 @@ HomingAI Chat 是一个 Home Assistant 自定义组件，提供智能语音对�
 
 ## 安装方法
 
-### HACS 安装
+### 方法二：HACS 安装
 
 1. 确保已经安装了 [HACS](https://hacs.xyz/)
-2. HACS > 溢出菜单 > 自定义存储库
-[![Open your Home Assistant instance and show an integration.](https://my.home-assistant.io/badges/integration.svg)](https://my.home-assistant.io/redirect/integration/?domain=homingai_chat)
-
-[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=homingai_chat)
-
-4. 类别选择：集成
+2. HACS > 菜单 > Custom repositories
+3. 添加仓库：`https://github.com/your-username/homingai-chat`
+4. 类别选择：Integration
 5. 点击添加
 6. 在 HACS 集成页面搜索 "HomingAI Chat"
 7. 点击下载
 8. 重启 Home Assistant
 
-
 ## 配置说明
+
+[![Open your Home Assistant instance and show an integration.](https://my.home-assistant.io/badges/integration.svg)](https://my.home-assistant.io/redirect/integration/?domain=homingai_chat)
+
 
 1. 在 Home Assistant 的配置页面中添加集成
 2. 搜索 "HomingAI Chat"
-3. 按照提示完成配置
+3. 按照提示完成HomingAI Chat的授权
 4. 配置完成后，可以在侧边栏找到 HomingAI Chat 入口
+
+> 提示：点击上方按钮可以快速跳转到配置页面
 
 ## 使用方法
 
@@ -57,9 +58,7 @@ HomingAI Chat 是一个 Home Assistant 自定义组件，提供智能语音对�
 ## ⚠️ 注意事项
 
 - 首次使用需要授予麦克风权限
-- 语音合成仅支持 20 字以内的回复
 - 确保设备有可用的麦克风设备
-- 建议在网络良好的环境下使用
 
 ## 🔧 故障排除
 
@@ -92,7 +91,7 @@ HomingAI Chat 是一个 Home Assistant 自定义组件，提供智能语音对�
 
 ## 🤝 贡献指南
 
-欢迎提交 Pull Request 或创建 Issue。详见 [贡献指南](CONTRIBUTING.md)。
+欢迎提交 Pull Request 或者建立Issue。
 
 ---
 
