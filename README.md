@@ -96,3 +96,5 @@ HomingAI Chat 是一个 Home Assistant 自定义组件，提供智能语音对�
 
 ---
 
+Made with ❤️ by HomingAI Team
+
