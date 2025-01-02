@@ -15,23 +15,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Register static path for javascript and token file
     hass.http.register_static_path(
-        "/homingai_chat", 
+        "/homingai_chat",
         os.path.join(os.path.dirname(__file__), "custom_panels"),
         cache_headers=False
     )
     
     # Register the panel
     hass.components.frontend.async_register_built_in_panel(
-        "custom",
-        "HomingAI",
-        "mdi:robot",
-        "homingai_chat",
-        {"_panel_custom": {
-            "name": "homingai-chat",
-            "embed_iframe": True,
-            "trust_external": False,
-            "module_url": "/homingai_chat/homingai_chat.js",
-        }},
+        component_name="custom",
+        sidebar_title="HomingAI Chat",
+        sidebar_icon="mdi:chat",
+        frontend_url_path="homingai-chat",
+        config={
+            "_panel_custom": {
+                "name": "homingai-chat",
+                "embed_iframe": True,
+                "trust_external": False,
+                "js_url": "/homingai_chat/homingai_chat.js",
+                "module_url": "/homingai_chat/homingai_chat.js",
+            },
+            "homingai_token": entry.data.get("access_token", ""),
+        },
+        require_admin=False,
     )
 
     return True
@@ -39,6 +44,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     # Remove the panel
-    if "homingai_chat" in hass.data:
-        hass.components.frontend.async_remove_panel("homingai_chat")
+    try:
+        hass.components.frontend.async_remove_panel("homingai-chat")
+    except Exception as e:
+        pass
     return True
