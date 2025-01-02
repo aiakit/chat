@@ -23,8 +23,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register the panel
     hass.components.frontend.async_register_built_in_panel(
         component_name="custom",
-        sidebar_title="HomingAI Chat",
-        sidebar_icon="mdi:chat",
+        sidebar_title="HomingAI",
+        sidebar_icon="mdi:rebot",
         frontend_url_path="homingai-chat",
         config={
             "_panel_custom": {

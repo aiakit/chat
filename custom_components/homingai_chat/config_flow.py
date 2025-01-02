@@ -15,7 +15,7 @@ from .const import DOMAIN, TITLE, ACCESS_TOKEN
 
 _LOGGER = logging.getLogger(__name__)
 
-def save_token_to_file(token: str) -> bool:
+async def save_token_to_file(hass: HomeAssistant, token: str) -> bool:
     """Save token to file."""
     try:
         # 获取当前文件所在目录
@@ -25,12 +25,12 @@ def save_token_to_file(token: str) -> bool:
         # 确保目录存在
         custom_panels_dir.mkdir(parents=True, exist_ok=True)
         
-        # 保存 token 到文件
+        # 保存 token 到文件 - 使用异步执行器
         token_file = custom_panels_dir / "access_token.txt"
-        token_file.write_text(token)
+        await hass.async_add_executor_job(lambda: token_file.write_text(token))
         
         # 设置文件权限
-        token_file.chmod(0o644)
+        await hass.async_add_executor_job(lambda: token_file.chmod(0o644))
         
         return True
     except Exception as err:
@@ -91,8 +91,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         if result.get("code") == 200:
                             token = result["data"]["access_token"]
                             
-                            # 保存 token 到文件
-                            if save_token_to_file(token):
+                            # 保存 token 到文件 - 使用异步方法
+                            if await save_token_to_file(self.hass, token):
                                 return self.async_create_entry(
                                     title=TITLE,
                                     data={

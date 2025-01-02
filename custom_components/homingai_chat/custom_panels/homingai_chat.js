@@ -44,11 +44,10 @@ class HomingAIChat extends HTMLElement {
 
         // 添加音频上下文
         this.audioContext = null;
-        try {
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        } catch (e) {
-            console.warn('AudioContext not supported');
-        }
+
+        // Add new WebSocket-related properties
+        this.heartbeatInterval = null;
+        this.lastPongTime = null;
     }
 
     // 设置 Home Assistant 实例
@@ -143,20 +142,35 @@ class HomingAIChat extends HTMLElement {
 
         await getToken();
 
-        // 初始化音频上下文
-        if (!this.audioContext && window.AudioContext) {
-            try {
-                this.audioContext = new AudioContext();
-                // 在用户交互时恢复音频上下文
-                document.addEventListener('click', () => {
-                    if (this.audioContext.state === 'suspended') {
-                        this.audioContext.resume();
-                    }
-                }, { once: true });
-            } catch (e) {
-                console.warn('Failed to initialize AudioContext:', e);
+        // 延迟初始化 AudioContext，等待用户交互
+        const initAudioContext = () => {
+            if (!this.audioContext && window.AudioContext) {
+                try {
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.warn('Failed to initialize AudioContext:', e);
+                }
             }
-        }
+        };
+
+        // 添加用户交互事件监听器
+        const userInteractionEvents = ['click', 'touchstart', 'keydown'];
+        const handleUserInteraction = () => {
+            initAudioContext();
+            // 如果 AudioContext 被挂起，则恢复它
+            if (this.audioContext?.state === 'suspended') {
+                this.audioContext.resume();
+            }
+            // 移除事件监听器，因为我们只需要初始化一次
+            userInteractionEvents.forEach(event => {
+                document.removeEventListener(event, handleUserInteraction);
+            });
+        };
+
+        // 添加事件监听器
+        userInteractionEvents.forEach(event => {
+            document.addEventListener(event, handleUserInteraction, { once: true });
+        });
 
         // 检查并请求权限
         try {
@@ -285,46 +299,101 @@ class HomingAIChat extends HTMLElement {
         }
 
         try {
-            // 检查 access_token 是否存在
             if (!this.access_token) {
                 console.error('WebSocket initialization failed: access_token is not available');
                 return;
             }
 
-            // 在 URL 中添加 token 和用户名参数
             const wsUrl = new URL('wss://api.homingai.com/ws');
-            wsUrl.searchParams.append('token', this.access_token.trim());  // 确保 token 没有多余空格
+            wsUrl.searchParams.append('token', this.access_token.trim());
             wsUrl.searchParams.append('user_name', this.currentUser || 'Unknown User');
             
-            console.log('Connecting to WebSocket:', wsUrl.toString());  // 添加日志
+            console.log('Attempting WebSocket connection...');
             
             this.ws = new WebSocket(wsUrl.toString());
             
+            // Add connection timeout
+            const connectionTimeout = setTimeout(() => {
+                if (this.ws.readyState !== WebSocket.OPEN) {
+                    console.error('WebSocket connection timeout');
+                    this.ws.close();
+                    this.handleWebSocketReconnect();
+                }
+            }, 10000); // 10 second timeout
+
             this.ws.onopen = () => {
                 console.log('WebSocket connected successfully');
+                clearTimeout(connectionTimeout);
                 this.wsReconnectAttempts = 0;
+                
+                // Add heartbeat mechanism
+                this.startHeartbeat();
+            };
+
+            this.ws.onclose = (event) => {
+                clearTimeout(connectionTimeout);
+                this.stopHeartbeat();
+                console.log(`WebSocket disconnected: ${event.code} - ${event.reason}`);
+                this.handleWebSocketReconnect();
+            };
+
+            this.ws.onerror = (error) => {
+                clearTimeout(connectionTimeout);
+                console.error('WebSocket error:', error);
+                // Only handle reconnection if the connection is not already closing/closed
+                if (this.ws.readyState !== WebSocket.CLOSING && this.ws.readyState !== WebSocket.CLOSED) {
+                    this.handleWebSocketReconnect();
+                }
             };
 
             this.ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    this.handleWebSocketMessage(data);
+                    if (data.type === 'pong') {
+                        // Handle heartbeat response
+                        this.lastPongTime = Date.now();
+                    } else {
+                        this.handleWebSocketMessage(data);
+                    }
                 } catch (error) {
                     console.error('Failed to parse WebSocket message:', error);
                 }
             };
 
-            this.ws.onclose = (event) => {
-                console.log('WebSocket disconnected:', event.code, event.reason);
-                this.handleWebSocketReconnect();
-            };
-
-            this.ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-            };
         } catch (error) {
             console.error('Failed to initialize WebSocket:', error);
             this.handleWebSocketReconnect();
+        }
+    }
+
+    // Add heartbeat methods
+    startHeartbeat() {
+        this.lastPongTime = Date.now();
+        this.heartbeatInterval = setInterval(() => {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                // Check if we haven't received a pong in too long
+                if (Date.now() - this.lastPongTime > 30000) { // 30 seconds
+                    console.warn('No heartbeat response received, reconnecting...');
+                    this.ws.close();
+                    this.handleWebSocketReconnect();
+                    return;
+                }
+                
+                try {
+                    this.ws.send(JSON.stringify({ type: 'ping' }));
+                } catch (error) {
+                    console.error('Failed to send heartbeat:', error);
+                    this.ws.close();
+                    this.handleWebSocketReconnect();
+                }
+            }
+        }, 15000); // Send heartbeat every 15 seconds
+    }
+
+    stopHeartbeat() {
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = null;
         }
     }
 
@@ -1395,10 +1464,6 @@ class HomingAIChat extends HTMLElement {
             const chatResult = await chatResponse.json();
 
             if (chatResult.code === 200 && chatResult.msg) {
-                const timestamp = new Date().toLocaleTimeString('zh-CN', {
-                    hour: '2-digit',
-                    minute: '2-digit'
-                });
                 this.addMessage(chatResult.msg, 'bot');
 
                 if (needTTS) {
@@ -1410,7 +1475,9 @@ class HomingAIChat extends HTMLElement {
                                 'Content-Type': 'application/json'
                             },
                             body: JSON.stringify({
-                                text: chatResult.msg
+                                text: chatResult.msg,
+                                user_name: this.currentUser || 'Unknown User',
+                                option: 2
                             })
                         });
 
@@ -1419,6 +1486,11 @@ class HomingAIChat extends HTMLElement {
                         }
 
                         const ttsResult = await ttsResponse.json();
+
+                        // 新增：当 code 为 201 时直接返回，不做任何处理
+                        if (ttsResult.code === 201) {
+                            return;
+                        }
 
                         if (ttsResult.code === 200 && ttsResult.body) {
                             try {
@@ -1528,8 +1600,18 @@ class HomingAIChat extends HTMLElement {
     // 添加音频控制方法
     stopCurrentAudio() {
         if (this.currentAudio) {
-            this.currentAudio.pause();
-            this.currentAudio.currentTime = 0;
+            if (this.currentAudio instanceof AudioBufferSourceNode) {
+                // 如果是 AudioBufferSourceNode
+                try {
+                    this.currentAudio.stop();
+                } catch (e) {
+                    // 忽略已经停止的错误
+                }
+            } else {
+                // 如果是普通的 Audio 元素
+                this.currentAudio.pause();
+                this.currentAudio.currentTime = 0;
+            }
             this.isPlaying = false;
             this.currentAudio = null;
         }
@@ -1571,6 +1653,17 @@ class HomingAIChat extends HTMLElement {
                 chatContainer.scrollTop = chatContainer.scrollHeight;
                 break;
 
+            case 1000: // 实时语音合成
+                try {
+                    if (data.body && this.audioContext) {
+                        this.stopCurrentAudio();
+                        this.playStreamAudio(data.body);
+                    }
+                } catch (error) {
+                    console.error('WebSocket TTS audio processing error:', error);
+                }
+                break;
+
             default:
                 console.log('Unknown message type:', data.message_type);
         }
@@ -1581,11 +1674,17 @@ class HomingAIChat extends HTMLElement {
         if (this.wsReconnectTimer) {
             clearTimeout(this.wsReconnectTimer);
         }
+        
+        if (this.heartbeatInterval) {
+            this.stopHeartbeat();
+        }
 
         if (this.wsReconnectAttempts < this.maxReconnectAttempts) {
             this.wsReconnectAttempts++;
             const delay = Math.min(1000 * Math.pow(2, this.wsReconnectAttempts), 30000);
-
+            
+            console.log(`Scheduling reconnection attempt ${this.wsReconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
+            
             this.wsReconnectTimer = setTimeout(() => {
                 console.log(`Attempting to reconnect (${this.wsReconnectAttempts}/${this.maxReconnectAttempts})`);
                 this.initWebSocket();
@@ -1606,6 +1705,53 @@ class HomingAIChat extends HTMLElement {
         // 检查是否滚动到顶部附近
         // this.loadingThreshold 在构造函数中已定义为 100
         return container.scrollTop <= this.loadingThreshold;
+    }
+
+    // 添加新的流式音频播放方法
+    async playStreamAudio(base64Data) {
+        try {
+            // 如果 AudioContext 还没有初始化，等待用户交互
+            if (!this.audioContext) {
+                console.warn('AudioContext not initialized. Waiting for user interaction.');
+                return;
+            }
+
+            // 确保 AudioContext 处于运行状态
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+            }
+
+            // 解码 base64 数据
+            const audioData = this.base64ToBuffer(base64Data);
+            
+            // 解码音频数据
+            const audioBuffer = await this.audioContext.decodeAudioData(audioData);
+            
+            // 创建音频源
+            const source = this.audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            
+            // 连接到音频输出
+            source.connect(this.audioContext.destination);
+            
+            // 保存当前音频源以便停止播放
+            this.currentAudio = source;
+            this.isPlaying = true;
+
+            // 监听播放结束
+            source.onended = () => {
+                this.isPlaying = false;
+                this.currentAudio = null;
+            };
+
+            // 开始播放
+            source.start(0);
+
+        } catch (error) {
+            console.error('Stream audio playback error:', error);
+            this.isPlaying = false;
+            this.currentAudio = null;
+        }
     }
 }
 
