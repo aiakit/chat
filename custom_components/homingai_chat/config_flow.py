@@ -5,14 +5,37 @@ import logging
 from typing import Any
 import aiohttp
 import os
+from pathlib import Path
 
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN,TITLE,ACCESS_TOKEN
+from .const import DOMAIN, TITLE, ACCESS_TOKEN
 
 _LOGGER = logging.getLogger(__name__)
 
+def save_token_to_file(token: str) -> bool:
+    """Save token to file."""
+    try:
+        # 获取当前文件所在目录
+        current_dir = Path(__file__).parent
+        custom_panels_dir = current_dir / "custom_panels"
+        
+        # 确保目录存在
+        custom_panels_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 保存 token 到文件
+        token_file = custom_panels_dir / "access_token.txt"
+        token_file.write_text(token)
+        
+        # 设置文件权限
+        token_file.chmod(0o644)
+        
+        return True
+    except Exception as err:
+        _LOGGER.error("Failed to save token to file: %s", err)
+        return False
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for HomingAI"""
@@ -66,21 +89,19 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     ) as response:
                         result = await response.json()
                         if result.get("code") == 200:
-                            # 保存 token 到文件
                             token = result["data"]["access_token"]
-                            file_path = os.path.join(os.path.dirname(__file__), "custom_panels", "access_token.txt")
-                            try:
-                                with open(file_path, "w") as f:
-                                    f.write(token)
-                            except Exception as err:
-                                _LOGGER.error("Failed to save token to file: %s", err)
-                                
-                            return self.async_create_entry(
-                                title=TITLE,
-                                data={
-                                    ACCESS_TOKEN: token
-                                }
-                            )
+                            
+                            # 保存 token 到文件
+                            if save_token_to_file(token):
+                                return self.async_create_entry(
+                                    title=TITLE,
+                                    data={
+                                        ACCESS_TOKEN: token
+                                    }
+                                )
+                            else:
+                                errors["base"] = "token_save_failed"
+                                _LOGGER.error("Failed to save token")
                         else:
                             errors["base"] = "auth_verify_failed"
             except Exception as err:
