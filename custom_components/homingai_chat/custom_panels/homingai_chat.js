@@ -494,7 +494,6 @@ class HomingAIChat extends HTMLElement {
                     flex-direction: column;
                     margin-bottom: 16px;
                     max-width: 80%;
-                    animation: messageAppear 0.3s ease-out;
                 }
 
                 .user-message {
@@ -613,6 +612,14 @@ class HomingAIChat extends HTMLElement {
                 .mic-button {
                     background: none;
                     transition: all 0.3s ease;
+                    outline: none;  /* 移除默认的焦点轮廓 */
+                    position: relative;
+                    overflow: visible;  /* 允许脉冲效果溢出 */
+                }
+
+                .mic-button:focus {
+                    outline: none;  /* 移除焦点状态的轮廓 */
+                    box-shadow: none;  /* 移除焦点状态的阴影 */
                 }
 
                 .mic-button::before {
@@ -631,9 +638,9 @@ class HomingAIChat extends HTMLElement {
 
                 /* 录音状态下的麦克风按钮样式 */
                 .mic-button.recording::before {
-                    opacity: 0.7;
-                    transform: scale(0.9);
-                    transition: all 0.3s ease;
+                    opacity: 0.85;  /* 增加不透明度 */
+                    transform: scale(0.92);  /* 微调缩放比例 */
+                    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);  /* 使用更自然的过渡效果 */
                 }
 
                 /* 添加心跳动画样式 */
@@ -642,13 +649,13 @@ class HomingAIChat extends HTMLElement {
                         transform: scale(1);
                     }
                     25% {
-                        transform: scale(1.1);
+                        transform: scale(1.08);  /* 减小放大幅度 */
                     }
                     50% {
                         transform: scale(1);
                     }
                     75% {
-                        transform: scale(1.1);
+                        transform: scale(1.08);  /* 减小放大幅度 */
                     }
                     100% {
                         transform: scale(1);
@@ -658,34 +665,29 @@ class HomingAIChat extends HTMLElement {
                 /* 录音状态下的心跳效果 */
                 .mic-button.recording {
                     animation: heartbeat 1.5s ease-in-out infinite;
-                    background-color: rgba(138, 43, 226, 0.1); /* 添加淡紫色背景 */
-                    border-color: #8A2BE2; /* 紫色边框 */
-                }
-
-                .mic-button.recording::before {
-                    opacity: 0.7;
-                    transform: scale(0.9);
-                    transition: all 0.3s ease;
+                    background-color: rgba(138, 43, 226, 0.08);  /* 更淡的背景色 */
+                    border: none;  /* 移除边框 */
+                    box-shadow: 0 0 0 1px rgba(138, 43, 226, 0.2);  /* 添加柔和的边框效果 */
                 }
 
                 /* 添加脉冲动画 */
                 @keyframes pulse {
                     0% {
-                        box-shadow: 0 0 0 0 rgba(138, 43, 226, 0.4);
+                        box-shadow: 0 0 0 0 rgba(138, 43, 226, 0.2);  /* 更柔和的初始阴影 */
                     }
                     70% {
-                        box-shadow: 0 0 0 10px rgba(138, 43, 226, 0);
+                        box-shadow: 0 0 0 15px rgba(138, 43, 226, 0);  /* 增加扩散范围 */
                     }
                     100% {
                         box-shadow: 0 0 0 0 rgba(138, 43, 226, 0);
                     }
                 }
 
-                /* 录音状态下的脉冲效果 */
+                /* 录音状态下的组合动画效果 */
                 .mic-button.recording {
                     animation: 
                         heartbeat 1.5s ease-in-out infinite,
-                        pulse 2s infinite;
+                        pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;  /* 使用缓动函数让动画更自然 */
                 }
 
                 /* 移动端适配 */
@@ -693,14 +695,24 @@ class HomingAIChat extends HTMLElement {
                     .mic-button.recording {
                         animation: 
                             heartbeat 1.5s ease-in-out infinite,
-                            pulse 2s infinite;
+                            pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+                    }
+                    
+                    /* 移动端触摸优化 */
+                    .mic-button {
+                        -webkit-tap-highlight-color: transparent;  /* 移除移动端点击高亮 */
+                    }
+                    
+                    .mic-button:active {
+                        transform: scale(0.95);  /* 移动端稍微调大缩放比例 */
                     }
                 }
 
                 /* 触摸反馈 */
                 .mic-button:active {
-                    transform: scale(0.95);
-                    background-color: rgba(138, 43, 226, 0.2);
+                    transform: scale(0.92);  /* 减小按下时的缩放 */
+                    background-color: rgba(138, 43, 226, 0.12);  /* 更淡的按下状态背景色 */
+                    transition: all 0.1s ease-in-out;  /* 更快的按下反馈 */
                 }
 
                 /* 移动端样式适配 */
@@ -1137,6 +1149,13 @@ class HomingAIChat extends HTMLElement {
                     color: #666;
                     text-align: right;
                 }
+
+                /* 禁用状态样式 */
+                .mic-button:disabled {
+                    opacity: 0.5;
+                    animation: none;
+                    cursor: not-allowed;
+                }
             </style>
 
             <div class="chat-wrapper">
@@ -1418,7 +1437,7 @@ class HomingAIChat extends HTMLElement {
                         this.addMessage(sttResult.msg, 'user');
                         await this.sendChatMessage(sttResult.msg, true);
                     } else {
-                        throw new Error('语音识别失败：' + (sttResult.msg || '未知错误'));
+                        throw new Error((sttResult.msg || '未知错误'));
                     }
                 } catch (error) {
                     console.error('Error processing audio:', error);
