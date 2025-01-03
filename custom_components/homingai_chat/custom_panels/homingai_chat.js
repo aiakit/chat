@@ -42,12 +42,18 @@ class HomingAIChat extends HTMLElement {
         this.hasMore = true;  // 添加是否有更多数据的标志
         this.loadingThreshold = 100;  // 滚动触发阈值
 
-        // 添加音频上下文
-        this.audioContext = null;
-
         // Add new WebSocket-related properties
-        this.heartbeatInterval = null;
-        this.lastPongTime = null;
+        this.lastMessageTime = Date.now();
+
+        // 初始化音频上下文
+        try {
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            console.log('AudioContext initialized in constructor');
+        } catch (e) {
+            console.warn('Failed to initialize AudioContext:', e);
+        }
+
+        this.isIntentionalClose = false; // 添加标记，用于区分主动关闭和异常关闭
     }
 
     // 设置 Home Assistant 实例
@@ -200,6 +206,15 @@ class HomingAIChat extends HTMLElement {
         } catch (error) {
             console.warn('Permission initialization failed:', error);
         }
+
+        if (this.access_token) {
+            this.initializeEventListeners();
+            this.initWebSocket();
+            // 组件首次加载时加载历史消息
+            this.loadHistoryMessages(true).catch(error => {
+                console.error('Failed to load initial messages:', error);
+            });
+        }
     }
 
     // 初始化带 token 的功能
@@ -294,8 +309,22 @@ class HomingAIChat extends HTMLElement {
 
     // 修改 WebSocket 初始化方法
     initWebSocket() {
+        // 如果已经有活跃的连接，先检查它的状态
         if (this.ws) {
+            // 如果连接正常，直接返回
+            if (this.ws.readyState === WebSocket.OPEN) {
+                console.log('WebSocket connection is already active');
+                return;
+            }
+            // 如果连接正在建立中，等待它完成
+            if (this.ws.readyState === WebSocket.CONNECTING) {
+                console.log('WebSocket connection is already in progress');
+                return;
+            }
+            // 如果连接已关闭或正在关闭，清理它
+            console.log('Cleaning up existing WebSocket connection');
             this.ws.close();
+            this.ws = null;
         }
 
         try {
@@ -308,92 +337,89 @@ class HomingAIChat extends HTMLElement {
             wsUrl.searchParams.append('token', this.access_token.trim());
             wsUrl.searchParams.append('user_name', this.currentUser || 'Unknown User');
             
-            console.log('Attempting WebSocket connection...');
+            console.log('Initializing new WebSocket connection...');
             
             this.ws = new WebSocket(wsUrl.toString());
             
-            // Add connection timeout
+            // 连接超时处理
             const connectionTimeout = setTimeout(() => {
-                if (this.ws.readyState !== WebSocket.OPEN) {
-                    console.error('WebSocket connection timeout');
-                    this.ws.close();
-                    this.handleWebSocketReconnect();
+                if (this.ws) {
+                    if (this.ws.readyState === WebSocket.CONNECTING) {
+                        console.error('WebSocket connection timeout');
+                        this.ws.close();
+                        this.handleWebSocketReconnect();
+                    }
                 }
-            }, 10000); // 10 second timeout
+            }, 10000);
 
-            this.ws.onopen = () => {
+            this.ws.onopen = async () => {
                 console.log('WebSocket connected successfully');
                 clearTimeout(connectionTimeout);
                 this.wsReconnectAttempts = 0;
                 
-                // Add heartbeat mechanism
-                this.startHeartbeat();
+                // 连接成功后加载历史消息
+                await this.loadHistoryMessages(true);
             };
 
             this.ws.onclose = (event) => {
                 clearTimeout(connectionTimeout);
-                this.stopHeartbeat();
-                console.log(`WebSocket disconnected: ${event.code} - ${event.reason}`);
-                this.handleWebSocketReconnect();
-            };
-
-            this.ws.onerror = (error) => {
-                clearTimeout(connectionTimeout);
-                console.error('WebSocket error:', error);
-                // Only handle reconnection if the connection is not already closing/closed
-                if (this.ws.readyState !== WebSocket.CLOSING && this.ws.readyState !== WebSocket.CLOSED) {
-                    this.handleWebSocketReconnect();
+                // 检查关闭代码，1006 表示异常关闭
+                if (event.code === 1006) {
+                    console.log(`WebSocket disconnected abnormally: ${event.code} - ${event.reason}`);
+                    // 只有在不是主动关闭的情况下才重连
+                    if (!this.isIntentionalClose) {
+                        this.handleWebSocketReconnect();
+                    }
+                } else {
+                    console.log(`WebSocket closed with code: ${event.code} - ${event.reason}`);
                 }
             };
 
             this.ws.onmessage = (event) => {
                 try {
-                    const data = JSON.parse(event.data);
-                    if (data.type === 'pong') {
-                        // Handle heartbeat response
-                        this.lastPongTime = Date.now();
-                    } else {
-                        this.handleWebSocketMessage(data);
+                    // 如果收到 ping 消息，回复 pong
+                    if (event.data === 'ping') {
+                        console.debug('Received ping, sending pong');
+                        try {
+                            this.ws.send('pong');
+                        } catch (error) {
+                            console.error('Failed to send pong:', error);
+                        }
+                        return;
+                    }
+
+                    // 处理业务消息
+                    const messages = event.data.split('\n');
+                    for (const message of messages) {
+                        if (!message.trim()) continue;
+                        
+                        try {
+                            const data = JSON.parse(message);
+                            this.handleWebSocketMessage(data);
+                        } catch (parseError) {
+                            console.error('Failed to parse message:', {
+                                error: parseError,
+                                messagePreview: message.substring(0, 100)
+                            });
+                        }
                     }
                 } catch (error) {
-                    console.error('Failed to parse WebSocket message:', error);
+                    console.error('WebSocket message handling error:', error);
+                }
+            };
+
+            this.ws.onerror = (error) => {
+                clearTimeout(connectionTimeout);
+                console.error('WebSocket error:', error);
+                // 只在连接未关闭时处理重连
+                if (this.ws && this.ws.readyState !== WebSocket.CLOSING && this.ws.readyState !== WebSocket.CLOSED) {
+                    this.handleWebSocketReconnect();
                 }
             };
 
         } catch (error) {
             console.error('Failed to initialize WebSocket:', error);
             this.handleWebSocketReconnect();
-        }
-    }
-
-    // Add heartbeat methods
-    startHeartbeat() {
-        this.lastPongTime = Date.now();
-        this.heartbeatInterval = setInterval(() => {
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                // Check if we haven't received a pong in too long
-                if (Date.now() - this.lastPongTime > 30000) { // 30 seconds
-                    console.warn('No heartbeat response received, reconnecting...');
-                    this.ws.close();
-                    this.handleWebSocketReconnect();
-                    return;
-                }
-                
-                try {
-                    this.ws.send(JSON.stringify({ type: 'ping' }));
-                } catch (error) {
-                    console.error('Failed to send heartbeat:', error);
-                    this.ws.close();
-                    this.handleWebSocketReconnect();
-                }
-            }
-        }, 15000); // Send heartbeat every 15 seconds
-    }
-
-    stopHeartbeat() {
-        if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval);
-            this.heartbeatInterval = null;
         }
     }
 
@@ -1026,6 +1052,24 @@ class HomingAIChat extends HTMLElement {
                 .error-tip {
                     color: #ff4d4f;
                 }
+
+                .audio-message {
+                    padding: 10px;
+                    background: #f5f5f5;
+                    border-radius: 8px;
+                }
+
+                .audio-message audio {
+                    width: 250px;
+                    height: 40px;
+                    margin-bottom: 5px;
+                }
+
+                .audio-message .message-time {
+                    font-size: 12px;
+                    color: #666;
+                    text-align: right;
+                }
             </style>
 
             <div class="chat-wrapper">
@@ -1156,6 +1200,7 @@ class HomingAIChat extends HTMLElement {
 
     async startRecording() {
         try {
+            // 如果已经在录音，先停止当前录音并直接返回
             if (this.isRecording) {
                 await this.stopRecording();
                 return;
@@ -1166,36 +1211,57 @@ class HomingAIChat extends HTMLElement {
                 return;
             }
 
-            let stream;
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        echoCancellation: { ideal: true },
-                        noiseSuppression: { ideal: true },
-                        autoGainControl: { ideal: true }
-                    }
-                });
-
-                if (!stream || !stream.getAudioTracks().length) {
-                    return;
-                }
-
-                await this.setupRecording(stream);
-
-            } catch (error) {
-                console.error('Recording setup failed:', error);
+            // 清理之前的资源
+            if (this.mediaRecorder) {
+                this.mediaRecorder = null;
             }
+            this.audioChunks = [];
+            this.recordingDuration = 0;
+
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: { ideal: true },
+                    noiseSuppression: { ideal: true },
+                    autoGainControl: { ideal: true }
+                }
+            });
+
+            if (!stream || !stream.getAudioTracks().length) {
+                return;
+            }
+
+            await this.setupRecording(stream);
+
         } catch (error) {
             console.error('Recording failed:', error);
+            this.addMessage('录音失败: ' + error.message, 'bot');
         }
     }
 
     // 修改 setupRecording 方法
     async setupRecording(stream) {
         try {
+            // 清理之前的资源
+            if (this.mediaRecorder) {
+                try {
+                    this.mediaRecorder.removeEventListener('dataavailable', this.handleDataAvailable);
+                    this.mediaRecorder.removeEventListener('stop', this.handleStop);
+                    this.mediaRecorder = null;
+                } catch (e) {
+                    console.warn('Cleanup old mediaRecorder failed:', e);
+                }
+            }
+
+            // 清理计时器
             if (this.recordingTimer) {
                 clearInterval(this.recordingTimer);
+                this.recordingTimer = null;
             }
+
+            // 重置录音状态和数据
+            this.audioChunks = [];
+            this.recordingDuration = 0;
+            this.isRecording = false;
 
             // 检查支持的 MIME 类型
             let mimeType = 'audio/webm';
@@ -1207,24 +1273,54 @@ class HomingAIChat extends HTMLElement {
                 }
             }
 
+            // 创建新的 MediaRecorder 实例
             this.mediaRecorder = new MediaRecorder(stream, {
                 mimeType,
                 audioBitsPerSecond: 128000
             });
 
-            this.audioChunks = [];
-            this.recordingDuration = 0;
+            // 设置录音计时器
+            this.recordingTimer = setInterval(() => {
+                this.recordingDuration++;
+                const recordButton = this.shadowRoot.getElementById('recordButton');
+                const minutes = Math.floor(this.recordingDuration / 60);
+                const seconds = this.recordingDuration % 60;
+                recordButton.setAttribute('title', `录音中: ${minutes}:${seconds.toString().padStart(2, '0')}`);
+            }, 1000);
 
-            this.mediaRecorder.addEventListener('dataavailable', (event) => {
-                this.audioChunks.push(event.data);
-            });
+            // 设置数据收集事件
+            this.handleDataAvailable = (event) => {
+                if (event.data.size > 0) {
+                    this.audioChunks.push(event.data);
+                }
+            };
+            this.mediaRecorder.addEventListener('dataavailable', this.handleDataAvailable);
 
-            this.mediaRecorder.addEventListener('stop', async () => {
+            // 设置停止事件
+            this.handleStop = async () => {
                 try {
-                    // 获取原始音频数据并转换为 WAV
+                    // 停止所有轨道
+                    stream.getTracks().forEach(track => track.stop());
+
+                    // 确保有录音数据
+                    if (this.audioChunks.length === 0) {
+                        throw new Error('没有录到音频数据');
+                    }
+
                     const audioBlob = new Blob(this.audioChunks, {
-                        type: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
+                        type: mimeType
                     });
+
+                    // 检查 blob 大小
+                    if (audioBlob.size === 0) {
+                        throw new Error('录音文件大小为0');
+                    }
+
+                    console.log('Audio blob created:', {
+                        type: audioBlob.type,
+                        size: audioBlob.size
+                    });
+
                     const finalBlob = await this.convertToWav(audioBlob);
 
                     // 发送语音识别请求
@@ -1242,30 +1338,28 @@ class HomingAIChat extends HTMLElement {
                     }
 
                     const sttResult = await sttResponse.json();
-
+                    
                     if (sttResult.code === 200 && sttResult.msg) {
                         this.addMessage(sttResult.msg, 'user');
                         await this.sendChatMessage(sttResult.msg, true);
                     } else {
                         throw new Error('语音识别失败：' + (sttResult.msg || '未知错误'));
                     }
-
                 } catch (error) {
                     console.error('Error processing audio:', error);
                     this.addMessage(error.message, 'bot');
-                } finally {
-                    // 清理资源
-                    stream.getTracks().forEach(track => track.stop());
                 }
-            });
+            };
+            this.mediaRecorder.addEventListener('stop', this.handleStop);
 
-            // 每秒钟生成一个数据块
+            // 开始录音
             this.mediaRecorder.start(1000);
             this.isRecording = true;
 
+            // 更新 UI
             const recordButton = this.shadowRoot.getElementById('recordButton');
             const inputWrapper = this.shadowRoot.querySelector('.input-wrapper');
-            const chatWrapper = this.shadowRoot.querySelector('.chat-wrapper');  // 改为选择 chat-wrapper
+            const chatWrapper = this.shadowRoot.querySelector('.chat-wrapper');  // 获取 chat-wrapper
 
             if (recordButton) {
                 recordButton.classList.add('recording');
@@ -1274,9 +1368,10 @@ class HomingAIChat extends HTMLElement {
             if (inputWrapper) {
                 inputWrapper.classList.add('recording');
             }
-            if (chatWrapper) {  // 将录音状态添加到 chat-wrapper
+            if (chatWrapper) {  // 添加录音状态到 chat-wrapper
                 chatWrapper.classList.add('recording');
             }
+
         } catch (error) {
             console.error('Setup recording failed:', error);
             throw new Error('录音设置失败：' + error.message);
@@ -1291,9 +1386,10 @@ class HomingAIChat extends HTMLElement {
             this.mediaRecorder.stop();
             this.isRecording = false;
 
+            // 更新 UI
             const recordButton = this.shadowRoot.getElementById('recordButton');
             const inputWrapper = this.shadowRoot.querySelector('.input-wrapper');
-            const chatWrapper = this.shadowRoot.querySelector('.chat-wrapper');  // 改为选择 chat-wrapper
+            const chatWrapper = this.shadowRoot.querySelector('.chat-wrapper');  // 获取 chat-wrapper
 
             if (recordButton) {
                 recordButton.classList.remove('recording');
@@ -1369,7 +1465,8 @@ class HomingAIChat extends HTMLElement {
         }
         // 清理 WebSocket
         if (this.ws) {
-            this.ws.close();
+            this.isIntentionalClose = true; // 标记这是一个主动关闭
+            this.ws.close(1000, 'Component disconnected');
             this.ws = null;
         }
         if (this.wsReconnectTimer) {
@@ -1383,23 +1480,22 @@ class HomingAIChat extends HTMLElement {
         const sampleRate = buffer.sampleRate;
         const format = 1; // PCM
         const bitDepth = 16;
-
         const bytesPerSample = bitDepth / 8;
         const blockAlign = numChannels * bytesPerSample;
-
+        
         const dataLength = buffer.length * blockAlign;
         const bufferLength = 44 + dataLength;
-
         const arrayBuffer = new ArrayBuffer(bufferLength);
         const view = new DataView(arrayBuffer);
-
+        
         // WAV 文件头
         const writeString = (view, offset, string) => {
             for (let i = 0; i < string.length; i++) {
                 view.setUint8(offset + i, string.charCodeAt(i));
             }
         };
-
+        
+        // 写入 WAV 头部信息
         writeString(view, 0, 'RIFF');
         view.setUint32(4, 36 + dataLength, true);
         writeString(view, 8, 'WAVE');
@@ -1413,31 +1509,20 @@ class HomingAIChat extends HTMLElement {
         view.setUint16(34, bitDepth, true);
         writeString(view, 36, 'data');
         view.setUint32(40, dataLength, true);
-
+        
         // 写入音频数据
         const offset = 44;
-        const channelData = new Float32Array(buffer.length);
         let pos = 0;
 
-        for (let i = 0; i < buffer.numberOfChannels; i++) {
-            const channel = buffer.getChannelData(i);
-            for (let j = 0; j < buffer.length; j++) {
-                if (i === 0) {
-                    channelData[j] = channel[j];
-                } else {
-                    channelData[j] += channel[j];
-                }
-
-                if (i === buffer.numberOfChannels - 1) {
-                    const sample = channelData[j] / buffer.numberOfChannels;
-                    const val = Math.max(-1, Math.min(1, sample));
-                    view.setInt16(pos + offset, val < 0 ? val * 0x8000 : val * 0x7FFF, true);
-                    pos += 2;
-                }
-            }
+        // 只处理第一个声道的数据
+        const channel = buffer.getChannelData(0);
+        for (let i = 0; i < buffer.length; i++) {
+            const sample = Math.max(-1, Math.min(1, channel[i]));
+            view.setInt16(pos + offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+            pos += bytesPerSample;
         }
-
-        return new Blob([arrayBuffer], {type: 'audio/wav'});
+        
+        return new Blob([arrayBuffer], { type: 'audio/wav' });
     }
 
     // 修改 sendChatMessage 方法
@@ -1523,53 +1608,100 @@ class HomingAIChat extends HTMLElement {
 
     // 添加 base64 转换方法
     base64ToBuffer(base64) {
-        const binaryString = window.atob(base64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
+        try {
+            console.log('Converting base64 to buffer, length:', base64.length);
+            const binaryString = window.atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            console.log('Buffer created successfully');
+            return bytes.buffer;
+        } catch (error) {
+            console.error('Failed to convert base64 to buffer:', error);
+            throw error;
         }
-        return bytes.buffer;
     }
 
     // 修改 playAudio 方法
-    playAudio(audioUrl) {
-        // 停止当前正在播放的音频
-        this.stopCurrentAudio();
+    async playAudio(audioUrl) {
+        try {
+            // 先停止当前播放的音频
+            await this.stopCurrentAudio();
 
-        const audio = new Audio();
-        this.currentAudio = audio;
-        this.isPlaying = true;
+            // 创建新的音频实例
+            const audio = new Audio();
+            
+            // iOS Safari 需要设置这些属性
+            audio.setAttribute('playsinline', 'true');
+            audio.setAttribute('webkit-playsinline', 'true');
+            audio.preload = 'auto';
 
-        // 添加音频事件监听器
-        audio.addEventListener('error', (e) => {
-            console.error('Audio playback error:', {
-                error: e.target.error,
-                code: e.target.error.code,
-                message: e.target.error.message
+            // 设置事件监听器
+            const playPromise = new Promise((resolve, reject) => {
+                audio.oncanplaythrough = () => {
+                    this.currentAudio = audio;
+                    this.isPlaying = true;
+                    audio.play().then(resolve).catch(reject);
+                };
+
+                audio.onerror = () => {
+                    reject(new Error('Audio loading failed'));
+                };
+
+                audio.onended = () => {
+                    this.cleanupAudio(audio, audioUrl);
+                };
             });
-            this.isPlaying = false;
-            this.addMessage('语音播放失败', 'bot');
-        });
 
-        audio.addEventListener('ended', () => {
-            this.isPlaying = false;
-            this.currentAudio = null;
-            URL.revokeObjectURL(audioUrl);
-        });
+            // 设置音频源并等待播放
+            audio.src = audioUrl;
+            await playPromise;
 
-        // iOS Safari 需要设置这些属性
-        audio.setAttribute('playsinline', 'true');
-        audio.setAttribute('webkit-playsinline', 'true');
-        audio.preload = 'auto';
-        audio.src = audioUrl;
-
-        const playPromise = audio.play();
-        if (playPromise !== undefined) {
-            playPromise.catch(error => {
-                console.error('Autoplay failed:', error);
-                this.isPlaying = false;
-            });
+        } catch (error) {
+            console.warn('Audio playback warning:', error);
+            // 不抛出错误，只清理资源
+            this.cleanupAudio(this.currentAudio, audioUrl);
         }
+    }
+
+    // 修改 stopCurrentAudio 方法
+    async stopCurrentAudio() {
+        if (this.currentAudio) {
+            try {
+                this.currentAudio.pause();
+                await this.cleanupAudio(this.currentAudio, this.currentAudio.src);
+            } catch (error) {
+                console.warn('Stop audio warning:', error);
+            }
+        }
+    }
+
+    // 修改 cleanupAudio 方法
+    async cleanupAudio(audio, audioUrl) {
+        if (audio) {
+            try {
+                audio.pause();
+                audio.src = '';
+                audio.load();
+                audio.oncanplaythrough = null;
+                audio.onerror = null;
+                audio.onended = null;
+            } catch (e) {
+                console.warn('Audio cleanup warning:', e);
+            }
+        }
+
+        if (audioUrl) {
+            try {
+                URL.revokeObjectURL(audioUrl);
+            } catch (e) {
+                console.warn('URL cleanup warning:', e);
+            }
+        }
+
+        this.currentAudio = null;
+        this.isPlaying = false;
     }
 
     // 添加音频转换辅助方法
@@ -1597,31 +1729,19 @@ class HomingAIChat extends HTMLElement {
         }
     }
 
-    // 添加音频控制方法
-    stopCurrentAudio() {
-        if (this.currentAudio) {
-            if (this.currentAudio instanceof AudioBufferSourceNode) {
-                // 如果是 AudioBufferSourceNode
-                try {
-                    this.currentAudio.stop();
-                } catch (e) {
-                    // 忽略已经停止的错误
-                }
-            } else {
-                // 如果是普通的 Audio 元素
-                this.currentAudio.pause();
-                this.currentAudio.currentTime = 0;
-            }
-            this.isPlaying = false;
-            this.currentAudio = null;
-        }
-    }
-
     // 处理 WebSocket 消息
     handleWebSocketMessage(data) {
+        console.log('Handling WebSocket message:', {
+            type: data.message_type,
+            hasContent: !!data.content,
+            hasBody: !!data.body,
+            isComplete: data.is_complete
+        });
+
         // 根据消息类型处理不同的消息
         switch (data.message_type) {
             case 1: // 用户消息
+                console.log('Processing user message');
                 const messageElement = this.createMessageElement({
                     type: 'user',
                     content: data.content,
@@ -1629,8 +1749,8 @@ class HomingAIChat extends HTMLElement {
                         hour: '2-digit',
                         minute: '2-digit'
                     }),
-                    showUserName: true,  // 显示用户名
-                    userName: data.user_name  // 使用服务器返回的用户名
+                    showUserName: true,
+                    userName: data.user_name
                 });
 
                 const messagesContainer = this.shadowRoot.getElementById('messages');
@@ -1639,6 +1759,7 @@ class HomingAIChat extends HTMLElement {
                 break;
 
             case 2: // 机器人消息
+                console.log('Processing bot message');
                 const botMessage = this.createMessageElement({
                     type: 'bot',
                     content: data.content,
@@ -1654,14 +1775,9 @@ class HomingAIChat extends HTMLElement {
                 break;
 
             case 1000: // 实时语音合成
-                try {
-                    if (data.body && this.audioContext) {
-                        this.stopCurrentAudio();
-                        this.playStreamAudio(data.body);
-                    }
-                } catch (error) {
-                    console.error('WebSocket TTS audio processing error:', error);
-                }
+                this.handleAudioMessage(data).catch(error => {
+                    console.error('Audio message processing error:', error);
+                });
                 break;
 
             default:
@@ -1669,30 +1785,81 @@ class HomingAIChat extends HTMLElement {
         }
     }
 
+    // 修改 handleAudioMessage 方法
+    async handleAudioMessage(data) {
+        try {
+            // 如果是完成信号，直接返回
+            if (data.is_complete === true) {
+                return;
+            }
+
+            // 检查音频数据
+            if (!data.body) {
+                console.warn('No audio data received');
+                return;
+            }
+
+            // 创建音频 Blob
+            const audioData = this.base64ToArrayBuffer(data.body);
+            const audioBlob = new Blob([audioData], { 
+                type: 'audio/wav'  // 明确指定编解码器
+            });
+            
+            // 创建 URL 并播放
+            const audioUrl = URL.createObjectURL(audioBlob);
+            await this.playAudio(audioUrl);
+
+        } catch (error) {
+            console.warn('Audio message warning:', error);
+            await this.cleanupAudio(this.currentAudio, null);
+        }
+    }
+
+    // base64 转换方法
+    base64ToArrayBuffer(base64) {
+        const binaryString = window.atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+    }
+
     // 处理 WebSocket 重连
     handleWebSocketReconnect() {
         if (this.wsReconnectTimer) {
             clearTimeout(this.wsReconnectTimer);
-        }
-        
-        if (this.heartbeatInterval) {
-            this.stopHeartbeat();
+            this.wsReconnectTimer = null;
         }
 
-        if (this.wsReconnectAttempts < this.maxReconnectAttempts) {
-            this.wsReconnectAttempts++;
-            const delay = Math.min(1000 * Math.pow(2, this.wsReconnectAttempts), 30000);
-            
-            console.log(`Scheduling reconnection attempt ${this.wsReconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
-            
-            this.wsReconnectTimer = setTimeout(() => {
-                console.log(`Attempting to reconnect (${this.wsReconnectAttempts}/${this.maxReconnectAttempts})`);
-                this.initWebSocket();
-            }, delay);
-        } else {
+        // 添加最小重连间隔检查
+        const now = Date.now();
+        if (this.lastReconnectAttempt && (now - this.lastReconnectAttempt) < 5000) {
+            console.log('Reconnection attempted too frequently, waiting...');
+            return;
+        }
+        this.lastReconnectAttempt = now;
+
+        // 如果已经达到最大重试次数，不再继续重试
+        if (this.wsReconnectAttempts >= this.maxReconnectAttempts) {
             console.error('Max reconnection attempts reached');
             this.addMessage('连接失败，请刷新页面重试', 'bot');
+            return;
         }
+
+        this.wsReconnectAttempts++;
+        const delay = Math.min(2000 * Math.pow(2, this.wsReconnectAttempts), 60000);
+        
+        console.log(`Scheduling reconnection attempt ${this.wsReconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
+        
+        this.wsReconnectTimer = setTimeout(() => {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                console.log('Connection already restored, skipping reconnection');
+                return;
+            }
+            console.log(`Attempting to reconnect (${this.wsReconnectAttempts}/${this.maxReconnectAttempts})`);
+            this.initWebSocket();
+        }, delay);
     }
 
     // 添加 shouldLoadMore 方法
@@ -1707,50 +1874,61 @@ class HomingAIChat extends HTMLElement {
         return container.scrollTop <= this.loadingThreshold;
     }
 
-    // 添加新的流式音频播放方法
+    // 修改 playStreamAudio 方法
     async playStreamAudio(base64Data) {
-        try {
-            // 如果 AudioContext 还没有初始化，等待用户交互
-            if (!this.audioContext) {
-                console.warn('AudioContext not initialized. Waiting for user interaction.');
-                return;
-            }
+        if (!base64Data) {
+            console.error('No base64 data provided');
+            return;
+        }
 
-            // 确保 AudioContext 处于运行状态
-            if (this.audioContext.state === 'suspended') {
-                await this.audioContext.resume();
+        // 确保停止并清理之前的音频
+        if (this.currentAudio) {
+            try {
+                this.currentAudio.stop();
+                this.currentAudio.disconnect();
+            } catch (e) {
+                // 忽略错误
             }
+            this.currentAudio = null;
+        }
+
+        try {
+            // 创建新的 AudioContext
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
             // 解码 base64 数据
-            const audioData = this.base64ToBuffer(base64Data);
-            
+            const binaryString = atob(base64Data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+
             // 解码音频数据
-            const audioBuffer = await this.audioContext.decodeAudioData(audioData);
+            const audioBuffer = await audioContext.decodeAudioData(bytes.buffer);
             
             // 创建音频源
-            const source = this.audioContext.createBufferSource();
+            const source = audioContext.createBufferSource();
             source.buffer = audioBuffer;
-            
-            // 连接到音频输出
-            source.connect(this.audioContext.destination);
-            
-            // 保存当前音频源以便停止播放
-            this.currentAudio = source;
-            this.isPlaying = true;
+            source.connect(audioContext.destination);
 
-            // 监听播放结束
+            // 设置播放结束的处理
             source.onended = () => {
-                this.isPlaying = false;
+                source.disconnect();
+                audioContext.close();
                 this.currentAudio = null;
+                this.isPlaying = false;
             };
 
-            // 开始播放
+            // 保存当前音频源并开始播放
+            this.currentAudio = source;
+            this.isPlaying = true;
             source.start(0);
 
         } catch (error) {
-            console.error('Stream audio playback error:', error);
+            console.error('Audio playback error:', error);
             this.isPlaying = false;
             this.currentAudio = null;
+            throw new Error('音频格式转换失败: ' + error.message);
         }
     }
 }
