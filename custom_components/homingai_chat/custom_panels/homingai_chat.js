@@ -62,7 +62,6 @@ class HomingAIChat extends HTMLElement {
         // 修改音频播放相关属性
         this.playbackAudioContext = null;
         this.playbackQueue = [];
-        this.playbackTime = 0;
         this.isPlaying = false;
         this.currentSource = null;
 
@@ -1190,7 +1189,6 @@ class HomingAIChat extends HTMLElement {
             } else {
                 inputContainer.classList.remove('show-send');
             }
-            this.stopCurrentAudio(); // 输入时停止播放
         });
 
         // 在发送消息后重置按钮状态
@@ -1263,6 +1261,9 @@ class HomingAIChat extends HTMLElement {
 
     async startRecording() {
         try {
+            // 开始录音时停止当前播放
+            this.stopCurrentAudio();
+            
             // Play begin sound before starting recording
             await this.beginSound.play();
 
@@ -1630,8 +1631,6 @@ class HomingAIChat extends HTMLElement {
 
     // 修改 sendChatMessage 方法
     async sendChatMessage(message, needTTS = false) {
-        this.stopCurrentAudio();
-
         try {
             const chatResponse = await fetch('https://api.homingai.com/ha/home/chat', {
                 method: 'POST',
@@ -1768,8 +1767,10 @@ class HomingAIChat extends HTMLElement {
 
     // 修改 playAudio 方法
     playAudio(audioUrl) {
-        // 停止当前正在播放的音频
-        this.stopCurrentAudio();
+        // 如果正在录音，才停止当前播放
+        if (this.isRecording) {
+            this.stopCurrentAudio();
+        }
 
         const audio = new Audio();
         this.currentAudio = audio;
@@ -1815,7 +1816,6 @@ class HomingAIChat extends HTMLElement {
 
         this.isPlaying = false;
         this.playbackQueue = [];
-        this.playbackTime = this.playbackAudioContext ? this.playbackAudioContext.currentTime : 0;
     }
 
     // 添加音频转换辅助方法
@@ -1914,7 +1914,10 @@ class HomingAIChat extends HTMLElement {
                             if (audioData) {
                                 try {
                                     const audioBuffer = await this.playbackAudioContext.decodeAudioData(audioData);
-                                    this.audioBufferCache.push(audioBuffer);
+                                    // 只有在录音时才会打断当前播放
+                                    if (!this.isRecording) {
+                                        this.audioBufferCache.push(audioBuffer);
+                                    }
                                 } catch (error) {
                                     console.error('Failed to decode last audio chunk:', error);
                                 }
