@@ -1512,13 +1512,14 @@ class HomingAIChat extends HTMLElement {
         return messageElement;
     }
 
-    // 添加时间格式化方法
+    // 修改时间格式化方法
     formatMessageTime(timestamp) {
         try {
             // 如果传入的是时间戳（数字）
             if (typeof timestamp === 'number') {
-                // 将秒级时间戳转换为毫秒级
-                const date = new Date(timestamp * 1000);
+                // 判断时间戳长度，13位是毫秒，10位是秒
+                const milliseconds = timestamp.toString().length === 13 ? timestamp : timestamp * 1000;
+                const date = new Date(milliseconds);
                 return date.toLocaleTimeString('zh-CN', {
                     hour: '2-digit',
                     minute: '2-digit',
@@ -1535,6 +1536,17 @@ class HomingAIChat extends HTMLElement {
             }
             // 如果是字符串，尝试解析
             else if (typeof timestamp === 'string') {
+                const numericTimestamp = parseInt(timestamp);
+                if (!isNaN(numericTimestamp)) {
+                    // 同样判断转换后的数字长度
+                    const milliseconds = numericTimestamp.toString().length === 13 ? numericTimestamp : numericTimestamp * 1000;
+                    const date = new Date(milliseconds);
+                    return date.toLocaleTimeString('zh-CN', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false
+                    });
+                }
                 const date = new Date(timestamp);
                 return date.toLocaleTimeString('zh-CN', {
                     hour: '2-digit',
