@@ -58,6 +58,23 @@ class HomingAIChat extends HTMLElement {
 
         this.isIntentionalClose = false; // 添加标记，用于区分主动关闭和异常关闭
         this.lastMessageTime = null; // 添加最后消息时间戳属性
+
+        // 修改音频播放相关属性
+        this.playbackAudioContext = null;
+        this.playbackQueue = [];
+        this.playbackTime = 0;
+        this.isPlaying = false;
+        this.currentSource = null;
+
+        // 音频流收集相关属性
+        this.audioChunksForFile = [];
+        this.isCollectingAudio = false;
+        this.currentAudioMessageId = null;
+
+        // 添加音频缓冲相关属性
+        this.audioBufferCache = [];  // 用于存储临时的音频buffer
+        this.bufferThreshold = 3;    // 缓存阈值
+        this.totalDuration = 0;      // 记录总播放时间
     }
 
     // 设置 Home Assistant 实例
@@ -74,7 +91,6 @@ class HomingAIChat extends HTMLElement {
             const cachedToken = localStorage.getItem(this.TOKEN_CACHE_KEY);
 
             if (cachedToken) {
-                console.log('Using cached token');
                 return cachedToken;
             }
         } catch (error) {
@@ -1108,24 +1124,6 @@ class HomingAIChat extends HTMLElement {
                     color: #ff4d4f;
                 }
 
-                .audio-message {
-                    padding: 10px;
-                    background: #f5f5f5;
-                    border-radius: 8px;
-                }
-
-                .audio-message audio {
-                    width: 250px;
-                    height: 40px;
-                    margin-bottom: 5px;
-                }
-
-                .audio-message .message-time {
-                    font-size: 12px;
-                    color: #666;
-                    text-align: right;
-                }
-
                 /* 禁用状态样式 */
                 .mic-button:disabled {
                     opacity: 0.5;
@@ -1571,12 +1569,12 @@ class HomingAIChat extends HTMLElement {
             clearTimeout(this.wsReconnectTimer);
             this.wsReconnectTimer = null;
         }
-        this.cleanupAudioStream();
-        if (this.audioContext) {
-            this.audioContext.close().catch(e => {
-                console.warn('Error closing audio context:', e);
-            });
-            this.audioContext = null;
+
+        // Clean up audio playback
+        this.stopCurrentAudio();
+        if (this.playbackAudioContext) {
+            this.playbackAudioContext.close().catch(console.error);
+            this.playbackAudioContext = null;
         }
     }
 
@@ -1643,7 +1641,7 @@ class HomingAIChat extends HTMLElement {
                 },
                 body: JSON.stringify({
                     content: message,
-                    user_name: this.currentUser || 'Unknown User'  // 修改参数名为 user_name
+                    user_name: this.currentUser || 'Unknown User'
                 })
             });
 
@@ -1654,6 +1652,12 @@ class HomingAIChat extends HTMLElement {
             const chatResult = await chatResponse.json();
 
             if (chatResult.code === 200 && chatResult.msg) {
+                // 更新最后消息时间戳
+                if (chatResult.created_at) {
+                    this.lastMessageTime = chatResult.created_at;
+
+                }
+
                 this.addMessage(chatResult.msg, 'bot');
 
                 if (needTTS) {
@@ -1720,7 +1724,7 @@ class HomingAIChat extends HTMLElement {
 
             // 清理 base64 字符串
             const cleanedBase64 = base64.replace(/[^A-Za-z0-9+/=]/g, '');
-            
+
             // 检查 base64 字符串的有效性
             if (cleanedBase64.length % 4 !== 0) {
                 console.error('Invalid base64 length:', cleanedBase64.length);
@@ -1738,11 +1742,11 @@ class HomingAIChat extends HTMLElement {
 
             const length = binaryString.length;
             const bytes = new Uint8Array(length);
-            
+
             for (let i = 0; i < length; i++) {
                 bytes[i] = binaryString.charCodeAt(i);
             }
-            
+
             // 检查结果
             if (bytes.length === 0) {
                 throw new Error('Decoded data is empty');
@@ -1798,30 +1802,20 @@ class HomingAIChat extends HTMLElement {
 
 
     // 修改 stopCurrentAudio 方法
-    async stopCurrentAudio() {
-        if (this.currentAudio) {
-            this.currentAudio.pause();
-            await this.cleanupAudio(this.currentAudio, this.currentAudio.src);
-        }
-    }
-
-    // 修改 cleanupAudio 方法
-    async cleanupAudio(audio, audioUrl) {
-        if (audio) {
-            audio.pause();
-            audio.src = '';
-            audio.load();
-            audio.oncanplaythrough = null;
-            audio.onerror = null;
-            audio.onended = null;
+    stopCurrentAudio() {
+        if (this.currentSource) {
+            try {
+                this.currentSource.stop();
+                this.currentSource.disconnect();
+            } catch (error) {
+                console.warn('Error stopping current audio:', error);
+            }
+            this.currentSource = null;
         }
 
-        if (audioUrl) {
-            URL.revokeObjectURL(audioUrl);
-        }
-
-        this.currentAudio = null;
         this.isPlaying = false;
+        this.playbackQueue = [];
+        this.playbackTime = this.playbackAudioContext ? this.playbackAudioContext.currentTime : 0;
     }
 
     // 添加音频转换辅助方法
@@ -1851,8 +1845,7 @@ class HomingAIChat extends HTMLElement {
 
     // 处理 WebSocket 消息
     handleWebSocketMessage(data) {
-
-        // 更新最后消息时间戳
+        // 更新最后消息时间戳 (对所有消息类型都更新)
         if (data.created_at) {
             this.lastMessageTime = data.created_at;
         }
@@ -1885,7 +1878,7 @@ class HomingAIChat extends HTMLElement {
                 break;
 
             case 1000: // 实时语音合成
-                this.handleAudioMessage(data, 'audio/mpeg').catch(error => {
+                this.handleAudioMessage(data).catch(error => {
                     console.error('Audio message processing error:', error);
                 });
                 break;
@@ -1895,156 +1888,175 @@ class HomingAIChat extends HTMLElement {
         }
     }
 
-    // 修改 handleAudioMessage 方法
-    async handleAudioMessage(data, mimeType = 'audio/mpeg') {
-        try {
-            // 初始化音频上下文和增益节点
-            if (!this.audioContext) {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: 24000
-                });
-            }
-            
-            if (!this.gainNode) {
-                this.gainNode = this.audioContext.createGain();
-                this.gainNode.connect(this.audioContext.destination);
-                this.gainNode.gain.value = 1.0;
-            }
-
-            if (data.is_complete === true || !data.body) {
-                return;
-            }
-
-            const audioData = this.base64ToArrayBuffer(data.body);
-            
+    // 处理音频消息
+    handleAudioMessage(data) {
+        return new Promise((resolve, reject) => {
             try {
-                const audioBuffer = await this.audioContext.decodeAudioData(audioData);
-                this.audioBuffers.push(audioBuffer);
-
-                if (!this.isProcessingQueue) {
-                    await this.processAudioQueue();
-                }
-            } catch (decodeError) {
-                console.error('Audio decode error:', decodeError);
-                throw new Error('Failed to decode audio data: ' + decodeError.message);
-            }
-
-        } catch (error) {
-            console.error('Audio message handling error:', error);
-            this.cleanupAudioStream();
-        }
-    }
-
-    // 新增：处理音频队列的方法
-    async processAudioQueue() {
-        if (this.isProcessingQueue) return;
-        
-        this.isProcessingQueue = true;
-        
-        try {
-            while (this.audioBuffers.length > 0) {
-                if (this.audioContext.state === 'suspended') {
-                    await this.audioContext.resume();
+                // 如果没有初始化播放上下文，先初始化
+                if (!this.playbackAudioContext) {
+                    this.playbackAudioContext = new (window.AudioContext || window.webkitAudioContext)();
                 }
 
-                const audioBuffer = this.audioBuffers.shift();
-                
-                // 创建新的音频源
-                const source = this.audioContext.createBufferSource();
-                source.buffer = audioBuffer;
-                
-                // 创建新的增益节点用于这个源
-                const sourceGain = this.audioContext.createGain();
-                sourceGain.gain.value = 1.0;
-                
-                // 连接节点链
-                source.connect(sourceGain);
-                sourceGain.connect(this.gainNode);
-                
-                // 添加到活动节点集合
-                this.audioNodes.add(source);
-                this.audioNodes.add(sourceGain);
-                
-                // 设置播放结束的清理
-                source.onended = () => {
-                    try {
-                        sourceGain.disconnect();
-                        source.disconnect();
-                        this.audioNodes.delete(source);
-                        this.audioNodes.delete(sourceGain);
-                    } catch (e) {
-                        console.warn('Error cleaning up audio nodes:', e);
+                // 如果是完成标志
+                if (data.is_complete === true) {
+                    const processLastChunk = async () => {
+                        // 如果还有最后一段音频数据，先处理它
+                        if (data.body) {
+                            let audioData;
+                            if (data.body instanceof ArrayBuffer) {
+                                audioData = data.body;
+                            } else if (typeof data.body === 'string') {
+                                audioData = this.base64ToArrayBuffer(data.body);
+                            } else if (data.body instanceof Uint8Array) {
+                                audioData = data.body.buffer;
+                            }
+
+                            if (audioData) {
+                                try {
+                                    const audioBuffer = await this.playbackAudioContext.decodeAudioData(audioData);
+                                    this.audioBufferCache.push(audioBuffer);
+                                } catch (error) {
+                                    console.error('Failed to decode last audio chunk:', error);
+                                }
+                            }
+                        }
+
+                        // 合并并播放所有缓存的buffer
+                        if (this.audioBufferCache.length > 0) {
+                            this.mergeAndPlayBuffers();
+                        }
+                    };
+
+                    // 处理最后的数据并返回
+                    processLastChunk().then(resolve).catch(reject);
+                    return;
+                }
+
+                if (!data.body) {
+                    resolve();
+                    return;
+                }
+
+                // 处理不同格式的音频数据
+                let audioData;
+                if (data.body instanceof ArrayBuffer) {
+                    audioData = data.body;
+                } else if (typeof data.body === 'string') {
+                    audioData = this.base64ToArrayBuffer(data.body);
+                } else if (data.body instanceof Uint8Array) {
+                    audioData = data.body.buffer;
+                } else {
+                    reject(new Error('Unsupported audio data format'));
+                    return;
+                }
+
+                // 解码音频数据
+                this.playbackAudioContext.decodeAudioData(
+                    audioData,
+                    (audioBuffer) => {
+                        this.audioBufferCache.push(audioBuffer);
+                        
+                        // 当缓存达到阈值时，合并并添加到播放队列
+                        if (this.audioBufferCache.length >= this.bufferThreshold) {
+                            this.mergeAndPlayBuffers();
+                        }
+                        resolve();
+                    },
+                    (error) => {
+                        console.error('Audio decoding error:', error);
+                        reject(error);
                     }
-                };
-
-                // 计算开始时间
-                const startTime = Math.max(this.audioContext.currentTime, this.streamStartTime);
-                
-                // 开始播放
-                source.start(startTime);
-                
-                // 更新下一段音频的开始时间
-                this.streamStartTime = startTime + audioBuffer.duration+0.1;
-
-                // 等待当前片段播放完成
-                await new Promise(resolve => {
-                    setTimeout(resolve, audioBuffer.duration * 900);
-                });
+                );
+            } catch (error) {
+                console.error('Audio message handling error:', error);
+                reject(error);
             }
-        } catch (error) {
-            console.error('Error processing audio queue:', error);
-        } finally {
-            this.isProcessingQueue = false;
-            
-            if (this.audioBuffers.length > 0) {
-                await this.processAudioQueue();
-            }
-        }
+        });
     }
 
-    // 修改 cleanupAudioStream 方法
-    cleanupAudioStream() {
-        // 清理所有活动的音频节点
-        for (const node of this.audioNodes) {
-            try {
-                node.disconnect();
-            } catch (e) {
-                console.warn('Error disconnecting audio node:', e);
-            }
+    // 合并缓存的音频buffer并添加到播放队列
+    mergeAndPlayBuffers() {
+        if (this.audioBufferCache.length === 0) return;
+
+        // 计算总长度
+        const totalLength = this.audioBufferCache.reduce((total, buffer) => 
+            total + buffer.length, 0);
+
+        // 创建新的AudioBuffer
+        const mergedBuffer = this.playbackAudioContext.createBuffer(
+            1,  // 单声道
+            totalLength,
+            this.playbackAudioContext.sampleRate
+        );
+
+        // 合并所有buffer
+        let offset = 0;
+        for (const buffer of this.audioBufferCache) {
+            mergedBuffer.copyToChannel(buffer.getChannelData(0), 0, offset);
+            offset += buffer.length;
         }
-        this.audioNodes.clear();
+
+        // 清空缓存
+        this.audioBufferCache = [];
+
+        // 添加到播放队列
+        this.playbackQueue.push(mergedBuffer);
         
-        // 清空缓冲区和重置状态
-        this.audioBuffers = [];
-        this.streamStartTime = 0;
-        this.isProcessingQueue = false;
-
-        if (this.gainNode) {
-            try {
-                this.gainNode.disconnect();
-                this.gainNode = null;
-            } catch (e) {
-                console.warn('Error disconnecting gain node:', e);
-            }
-        }
-
-        if (this.audioContext && this.audioContext.state !== 'closed') {
-            try {
-                this.audioContext.resume();
-            } catch (e) {
-                console.warn('Error resuming audio context:', e);
-            }
+        // 如果当前没有播放，开始播放
+        if (!this.isPlaying) {
+            this.schedulePlayback();
         }
     }
 
-    // base64 转换方法
+    // 调度播放队列中的音频
+    schedulePlayback() {
+        if (this.isPlaying) return;
+        if (this.playbackQueue.length === 0) return;
+
+        // 获取下一个缓冲区
+        const buffer = this.playbackQueue.shift();
+
+        // 创建音频源
+        const source = this.playbackAudioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.playbackAudioContext.destination);
+
+        // 开始播放
+        source.start(0);  // 直接从0开始播放
+
+        // 标记为正在播放
+        this.isPlaying = true;
+
+        // 处理播放结束
+        source.onended = () => {
+            source.disconnect();
+            this.isPlaying = false;
+            // 继续播放队列中的下一个缓冲区
+            this.schedulePlayback();
+        };
+    }
+
+    // 修改 base64ToArrayBuffer 方法，添加错误处理
     base64ToArrayBuffer(base64) {
-        const binaryString = window.atob(base64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
+        try {
+            // 解码 base64
+            const binaryString = window.atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            // 检查结果
+            if (bytes.length === 0) {
+                throw new Error('Decoded data is empty');
+            }
+
+            return bytes.buffer;
+        } catch (error) {
+            console.error('Base64 conversion error:', error);
+            throw error;
         }
-        return bytes.buffer;
     }
 
     // 处理 WebSocket 重连
@@ -2130,158 +2142,6 @@ class HomingAIChat extends HTMLElement {
         // 检查是否滚动到顶部附近
         // this.loadingThreshold 在构造函数中已定义为 100
         return container.scrollTop <= this.loadingThreshold;
-    }
-
-    // 修改 playStreamAudio 方法，添加 mimeType 参数
-    async playStreamAudio(audioData, mimeType = 'audio/mpeg') {
-        if (!audioData) {
-            return;
-        }
-
-        try {
-            // 初始化 AudioContext，设置采样率为 24000
-            if (!this.audioContext) {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: 24000
-                });
-            }
-
-            // 确保 AudioContext 是激活状态
-            if (this.audioContext.state === 'suspended') {
-                await this.audioContext.resume();
-            }
-
-            // 将数据转换为 ArrayBuffer
-            let arrayBuffer;
-            if (audioData instanceof ArrayBuffer) {
-                arrayBuffer = audioData;
-            } else if (audioData instanceof Uint8Array) {
-                arrayBuffer = audioData.buffer;
-            } else if (typeof audioData === 'string') {
-                // 如果是字符串，转换为 Uint8Array
-                const bytes = new Uint8Array(audioData.length);
-                for (let i = 0; i < audioData.length; i++) {
-                    bytes[i] = audioData.charCodeAt(i);
-                }
-                arrayBuffer = bytes.buffer;
-            } else {
-                throw new Error('Unsupported audio data type');
-            }
-
-            console.log('Audio data length:', arrayBuffer.byteLength);
-            
-            // 解码音频数据
-            const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
-            
-            // 输出音频buffer信息用于调试
-            console.log('Audio buffer details:', {
-                duration: audioBuffer.duration,
-                numberOfChannels: audioBuffer.numberOfChannels,
-                sampleRate: audioBuffer.sampleRate,
-                length: audioBuffer.length
-            });
-
-            const source = this.audioContext.createBufferSource();
-            source.buffer = audioBuffer;
-
-            const gainNode = this.audioContext.createGain();
-            gainNode.gain.value = 1.0;
-            
-            source.connect(gainNode);
-            gainNode.connect(this.audioContext.destination);
-
-            this.audioSourceNode = source;
-            
-            source.onended = () => {
-                source.disconnect();
-                gainNode.disconnect();
-                this.audioSourceNode = null;
-                this.isStreamPlaying = false;
-            };
-
-            this.isStreamPlaying = true;
-            source.start(0);
-
-        } catch (error) {
-            console.error('Stream audio processing error:', error);
-            console.error('Error details:', error.message);
-            console.error('Audio data type:', typeof audioData);
-            if (audioData) {
-                console.error('Audio data preview:', 
-                    typeof audioData === 'string' ? audioData.substring(0, 100) : 'non-string data');
-            }
-            this.cleanupAudioStream();
-        }
-    }
-
-    // 修改 startStreamPlayback 方法以处理带 MIME 类型的音频数据
-    async startStreamPlayback() {
-        if (!this.audioQueue.length || this.isStreamPlaying) {
-            return;
-        }
-
-        this.isStreamPlaying = true;
-
-        try {
-            while (this.audioQueue.length > 0) {
-                const audioItem = this.audioQueue.shift();
-                const audioBuffer = await this.audioContext.decodeAudioData(audioItem.buffer);
-                
-                const source = this.audioContext.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(this.audioContext.destination);
-
-                this.audioSourceNode = source;
-
-                source.onended = () => {
-                    source.disconnect();
-                    this.audioSourceNode = null;
-                    
-                    if (this.audioQueue.length === 0) {
-                        this.isStreamPlaying = false;
-                    }
-                };
-
-                source.start(0);
-
-                await new Promise(resolve => {
-                    source.onended = () => {
-                        source.disconnect();
-                        this.audioSourceNode = null;
-                        resolve();
-                    };
-                });
-            }
-
-            this.isStreamPlaying = false;
-
-        } catch (error) {
-            console.error('Stream playback error:', error);
-            this.cleanupAudioStream();
-        }
-    }
-
-    // 添加清理流式音频方法
-    cleanupAudioStream() {
-        if (this.audioSourceNode) {
-            try {
-                this.audioSourceNode.stop();
-                this.audioSourceNode.disconnect(this.gainNode);
-            } catch (e) {
-                console.error('Cleanup error:', e);
-            }
-            this.audioSourceNode = null;
-        }
-
-        if (this.audioContext) {
-            try {
-                this.audioContext.resume();
-            } catch (e) {
-                console.error('AudioContext resume error:', e);
-            }
-        }
-
-        this.isStreamPlaying = false;
     }
 }
 
