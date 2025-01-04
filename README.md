@@ -64,6 +64,7 @@ HomingAI Chat 是一个 Home Assistant 自定义组件，提供智能语音对�
 
 - 首次使用需要授予麦克风权限
 - 确保设备有可用的麦克风设备
+- 您的 Home Assistant 必须通过 HTTPS 访问（这对于语音功能是必需的）
 
 ## 🔧 故障排除
 
