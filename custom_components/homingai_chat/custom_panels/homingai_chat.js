@@ -12,68 +12,43 @@ class HomingAIChat extends HTMLElement {
         this.isRecording = false;
         this.recordingTimer = null;
         this.recordingDuration = 0;
-        this.permissionIframe = null;
 
         const scriptPath = new URL(import.meta.url).pathname;
         this.basePath = scriptPath.substring(0, scriptPath.lastIndexOf('/'));
 
-        // Add audio feedback properties
+        // 音频反馈
         this.beginSound = new Audio(`${this.basePath}/begin.mp3`);
         this.doneSound = new Audio(`${this.basePath}/done.mp3`);
 
-        // 添加音频控制相关属性
-        this.currentAudio = null;
-        this.isPlaying = false;
-
-        // 添加用户名属性
+        // 基本属性
         this.currentUser = null;
         this._hass = null;
-
-        // 添加 WebSocket 相关属性
         this.ws = null;
         this.wsReconnectTimer = null;
         this.wsReconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
-
-        // 修改缓存相关属性，移除过期相关的属性
         this.tokenCache = null;
         this.TOKEN_CACHE_KEY = 'homingai_token_cache';
 
-        // 修改分页相关属性
+        // 分页相关
         this.currentPage = 1;
         this.pageSize = 20;
         this.isLoading = false;
-        this.hasMore = true;  // 添加是否有更多数据的标志
-        this.loadingThreshold = 100;  // 滚动触发阈值
+        this.hasMore = true;
+        this.loadingThreshold = 100;
 
-        // 初始化音频上下文
+        // 音频相关
         this.audioContext = null;
-        this.audioQueue = [];
-        this.isStreamPlaying = false;
-        this.gainNode = null;
-        this.audioBuffers = [];
-        this.isProcessingQueue = false;
-        this.streamStartTime = 0;
-        this.audioNodes = new Set(); // 新增：用于跟踪活动的音频节点
-
-        this.isIntentionalClose = false; // 添加标记，用于区分主动关闭和异常关闭
-        this.lastMessageTime = null; // 添加最后消息时间戳属性
-
-        // 修改音频播放相关属性
-        this.playbackAudioContext = null;
-        this.playbackQueue = [];
         this.isPlaying = false;
         this.currentSource = null;
+        this.playbackAudioContext = null;
+        this.playbackQueue = [];
+        this.audioBufferCache = [];
+        this.bufferThreshold = 3;
 
-        // 音频流收集相关属性
-        this.audioChunksForFile = [];
-        this.isCollectingAudio = false;
-        this.currentAudioMessageId = null;
-
-        // 添加音频缓冲相关属性
-        this.audioBufferCache = [];  // 用于存储临时的音频buffer
-        this.bufferThreshold = 3;    // 缓存阈值
-        this.totalDuration = 0;      // 记录总播放时间
+        // 状态标记
+        this.isIntentionalClose = false;
+        this.lastMessageTime = null;
     }
 
     // 设置 Home Assistant 实例
@@ -223,14 +198,6 @@ class HomingAIChat extends HTMLElement {
         }
     }
 
-    // 初始化带 token 的功能
-    initializeWithToken(token) {
-        if (token && this.isConnected) {
-            this.initializeEventListeners();
-            this.initWebSocket(token);
-        }
-    }
-
     // 添加历史消息加载方法
     async loadHistoryMessages(isInitial = false) {
         if (this.isLoading || (!this.hasMore && !isInitial)) return;
@@ -285,6 +252,12 @@ class HomingAIChat extends HTMLElement {
                         showUserName: msg.message_type === 1,
                         userName: msg.user_name
                     });
+                    
+                    // 只添加 history 类，不需要其他复杂的动画延迟
+                    if (!isInitial) {
+                        messageElement.classList.add('history');
+                    }
+                    
                     fragment.appendChild(messageElement);
                 });
 
@@ -485,6 +458,8 @@ class HomingAIChat extends HTMLElement {
                     flex-direction: column;
                     margin-bottom: 16px;
                     max-width: 80%;
+                    opacity: 0;
+                    animation: messageAppear 0.3s ease-out forwards;
                 }
 
                 .user-message {
@@ -729,6 +704,22 @@ class HomingAIChat extends HTMLElement {
                     from {
                         opacity: 0;
                         transform: translateY(10px);
+                    }
+                    to {
+                        opacity: 1;
+                        transform: translateY(0);
+                    }
+                }
+
+                /* 添加历史消息加载动画 */
+                .message.history {
+                    animation: historyAppear 0.3s ease-out forwards;
+                }
+
+                @keyframes historyAppear {
+                    from {
+                        opacity: 0;
+                        transform: translateY(-10px);
                     }
                     to {
                         opacity: 1;
