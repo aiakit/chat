@@ -1899,36 +1899,28 @@ class HomingAIChat extends HTMLElement {
         try {
             // 如果是完成标志则返回
             if (data.is_complete === true) {
-                console.log('[Audio] Received complete signal');
                 return;
             }
 
             if (!data.body) {
-                console.log('[Audio] No audio data received');
                 return;
             }
 
-            console.log('[Audio] Initializing audio context...');
             // 确保音频上下文已初始化
             await this.initializeAudioContext();
 
             // 处理音频数据
             let audioData;
             if (data.body instanceof ArrayBuffer) {
-                console.log('[Audio] Data is ArrayBuffer');
                 audioData = data.body;
             } else if (typeof data.body === 'string') {
-                console.log('[Audio] Data is base64 string, converting to ArrayBuffer');
                 audioData = this.base64ToArrayBuffer(data.body);
             } else if (data.body instanceof Uint8Array) {
-                console.log('[Audio] Data is Uint8Array, getting buffer');
                 audioData = data.body.buffer;
             }
 
             if (audioData) {
-                console.log('[Audio] Adding data to queue, queue length:', this.audioQueue.length);
                 this.audioQueue.push(audioData);
-                console.log('[Audio] Processing queue...');
                 await this.processAudioQueue();
             }
 
