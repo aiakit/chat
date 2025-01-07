@@ -311,19 +311,23 @@ class HomingAIChat extends HTMLElement {
 
             this.ws = new WebSocket(wsUrl.toString());
 
-            // 连接超时处理
+            // 添加连接超时处理
             const connectionTimeout = setTimeout(() => {
-                if (this.ws) {
-                    if (this.ws.readyState === WebSocket.CONNECTING) {
-                        this.ws.close();
-                        this.handleWebSocketReconnect();
-                    }
+                if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+                    this.ws.close();
+                    this.handleWebSocketReconnect();
                 }
             }, 10000);
 
+            // 添加网络状态监听
+            window.addEventListener('online', this.handleOnline.bind(this));
+            window.addEventListener('offline', this.handleOffline.bind(this));
+
+            // 保持原有的事件处理逻辑
             this.ws.onopen = async () => {
-                clearTimeout(connectionTimeout);
+                clearTimeout(connectionTimeout);  // 现在可以正常清除了
                 this.wsReconnectAttempts = 0;
+                this.isIntentionalClose = false;
 
                 // 隐藏重连加载动画
                 const reconnectingOverlay = this.shadowRoot.querySelector('.reconnecting-overlay');
@@ -338,8 +342,9 @@ class HomingAIChat extends HTMLElement {
                 await this.initializationPromise;
             };
 
+            // 保持原有的 onclose 处理
             this.ws.onclose = (event) => {
-                clearTimeout(connectionTimeout);
+                clearTimeout(connectionTimeout);  // 现在可以正常清除了
                 // 检查关闭代码，1006 表示异常关闭
                 if (event.code === 1006) {
                     // 只有在不是主动关闭的情况下才重连
@@ -349,6 +354,7 @@ class HomingAIChat extends HTMLElement {
                 }
             };
 
+            // 保持原有的消息处理逻辑
             this.ws.onmessage = (event) => {
                 try {
                     // 如果收到 ping 消息，回复 pong
@@ -382,7 +388,7 @@ class HomingAIChat extends HTMLElement {
             };
 
             this.ws.onerror = (error) => {
-                clearTimeout(connectionTimeout);
+                clearTimeout(connectionTimeout);  // 现在可以正常清除了
                 // 只在连接未关闭时处理重连
                 if (this.ws && this.ws.readyState !== WebSocket.CLOSING && this.ws.readyState !== WebSocket.CLOSED) {
                     this.handleWebSocketReconnect();
@@ -1322,6 +1328,8 @@ class HomingAIChat extends HTMLElement {
     // 修改 setupRecording 方法
     async setupRecording(stream) {
         try {
+            console.log('Setting up recording...');
+            
             // 清理之前的资源
             if (this.mediaRecorder) {
                 this.mediaRecorder.removeEventListener('dataavailable', this.handleDataAvailable);
@@ -1426,23 +1434,51 @@ class HomingAIChat extends HTMLElement {
             // 开始录音
             this.mediaRecorder.start(1000);
             this.isRecording = true;
+            console.log('Recording started successfully');
 
             // 更新 UI
             const recordButton = this.shadowRoot.getElementById('recordButton');
             const inputWrapper = this.shadowRoot.querySelector('.input-wrapper');
             const chatWrapper = this.shadowRoot.querySelector('.chat-wrapper');
+            const voiceWaveContainer = this.shadowRoot.querySelector('.voice-wave-container');
+            const recordingOverlay = this.shadowRoot.querySelector('.recording-overlay');
+
+            console.log('Updating UI elements for recording state...');
 
             if (recordButton) {
                 recordButton.classList.add('recording');
                 recordButton.classList.add('mic-button');
-                // 添加 aria-label 提升可访问性
                 recordButton.setAttribute('aria-label', '正在录音');
+                console.log('Record button updated');
+            } else {
+                console.warn('Record button not found');
             }
+
             if (inputWrapper) {
                 inputWrapper.classList.add('recording');
+                console.log('Input wrapper updated');
             }
-            if (chatWrapper) {  // 添加录音状态到 chat-wrapper
+
+            if (chatWrapper) {
                 chatWrapper.classList.add('recording');
+                console.log('Chat wrapper updated');
+            }
+
+            // 显示波形动画和遮罩层
+            if (voiceWaveContainer) {
+                voiceWaveContainer.style.opacity = '1';
+                voiceWaveContainer.style.pointerEvents = 'auto';
+                console.log('Voice wave container shown');
+            } else {
+                console.warn('Voice wave container not found');
+            }
+
+            if (recordingOverlay) {
+                recordingOverlay.style.opacity = '1';
+                recordingOverlay.style.pointerEvents = 'auto';
+                console.log('Recording overlay shown');
+            } else {
+                console.warn('Recording overlay not found');
             }
 
         } catch (error) {
@@ -1454,6 +1490,8 @@ class HomingAIChat extends HTMLElement {
     async stopRecording() {
         if (this.mediaRecorder && this.isRecording) {
             try {
+                console.log('Stopping recording...');
+
                 // Play done sound when stopping recording
                 await this.doneSound.play();
 
@@ -1461,52 +1499,66 @@ class HomingAIChat extends HTMLElement {
                 if (this.recordingTimer) {
                     clearInterval(this.recordingTimer);
                     this.recordingTimer = null;
+                    console.log('Recording timer cleared');
                 }
 
                 this.mediaRecorder.stop();
                 this.isRecording = false;
+                console.log('MediaRecorder stopped');
 
-                // 更新 UI - 移除所有录音相关的类
+                // 更新 UI
                 const recordButton = this.shadowRoot.getElementById('recordButton');
                 const inputWrapper = this.shadowRoot.querySelector('.input-wrapper');
                 const chatWrapper = this.shadowRoot.querySelector('.chat-wrapper');
                 const voiceWaveContainer = this.shadowRoot.querySelector('.voice-wave-container');
                 const recordingOverlay = this.shadowRoot.querySelector('.recording-overlay');
 
+                console.log('Updating UI elements for stopped state...');
+
                 // 移除所有录音相关的类和状态
                 if (recordButton) {
                     recordButton.classList.remove('recording');
                     recordButton.classList.remove('mic-button-recording');
                     recordButton.setAttribute('aria-label', '开始录音');
-                    recordButton.removeAttribute('title'); // 移除录音时间提示
+                    recordButton.removeAttribute('title');
+                    console.log('Record button reset');
                 }
                 
                 if (inputWrapper) {
                     inputWrapper.classList.remove('recording');
+                    console.log('Input wrapper reset');
                 }
                 
                 if (chatWrapper) {
                     chatWrapper.classList.remove('recording');
+                    console.log('Chat wrapper reset');
                 }
                 
                 // 确保波形动画和遮罩层被隐藏
                 if (voiceWaveContainer) {
                     voiceWaveContainer.style.opacity = '0';
+                    voiceWaveContainer.style.pointerEvents = 'none';
+                    console.log('Voice wave container hidden');
                 }
                 
                 if (recordingOverlay) {
                     recordingOverlay.style.opacity = '0';
                     recordingOverlay.style.pointerEvents = 'none';
+                    console.log('Recording overlay hidden');
                 }
 
                 // 重置录音状态文本
                 const recordingStatus = this.shadowRoot.querySelector('.recording-status');
                 if (recordingStatus) {
                     recordingStatus.textContent = '正在聆听...';
+                    console.log('Recording status text reset');
                 }
+
             } catch (error) {
                 console.error('Error stopping recording:', error);
             }
+        } else {
+            console.log('No active recording to stop');
         }
     }
 
@@ -1635,6 +1687,10 @@ class HomingAIChat extends HTMLElement {
             this.processingTimeout = null;
         }
         this.resetAudioContext();
+
+        // 移除网络状态监听
+        window.removeEventListener('online', this.handleOnline.bind(this));
+        window.removeEventListener('offline', this.handleOffline.bind(this));
     }
 
     audioBufferToWav(buffer) {
@@ -2258,6 +2314,15 @@ class HomingAIChat extends HTMLElement {
         } catch (error) {
             console.warn('Error resetting audio context:', error);
         }
+    }
+
+    // 添加网络状态处理方法
+    handleOnline() {
+        this.handleWebSocketReconnect();
+    }
+
+    handleOffline() {
+        this.addMessage('网络连接已断开，请检查网络设置', 'bot');
     }
 }
 // 注册自定义元素
