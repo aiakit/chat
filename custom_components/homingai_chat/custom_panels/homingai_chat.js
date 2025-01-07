@@ -37,8 +37,8 @@ class HomingAIChat extends HTMLElement {
         this.hasMore = true;
         this.loadingThreshold = 100;
 
-        // 添加 websocket_name 字段
-        this.websocket_name = null;
+        // 添加一个 Promise 来追踪初始化状态
+        this.initializationPromise = null;
     }
 
     // 添加生成随机字符串的方法
@@ -111,11 +111,10 @@ class HomingAIChat extends HTMLElement {
 
                 // 确保 token 有效
                 if (token) {
-                    this.access_token = token.trim();  // 移除可能的空白字符
+                    this.access_token = token.trim();
                     this.initializeEventListeners();
-                    await this.loadHistoryMessages(true);
 
-                    // 只有在成功获取 token 后才初始化 WebSocket
+                    // 只初始化 WebSocket，不直接加载历史消息
                     this.initWebSocket();
                 } else {
                     throw new Error('Invalid token');
@@ -191,10 +190,6 @@ class HomingAIChat extends HTMLElement {
         if (this.access_token) {
             this.initializeEventListeners();
             this.initWebSocket();
-            // 组件首次加载时加载历史消息
-            this.loadHistoryMessages(true).catch(error => {
-                console.error('Failed to load initial messages:', error);
-            });
         }
     }
 
@@ -330,21 +325,27 @@ class HomingAIChat extends HTMLElement {
                 clearTimeout(connectionTimeout);
                 this.wsReconnectAttempts = 0;
 
-                // 删除重连判断，直接加载历史消息
-                await this.loadHistoryMessages(true);
+                // 隐藏重连加载动画
+                const reconnectingOverlay = this.shadowRoot.querySelector('.reconnecting-overlay');
+                if (reconnectingOverlay) {
+                    reconnectingOverlay.classList.remove('active');
+                }
+
+                // 使用 Promise 确保只加载一次
+                if (!this.initializationPromise) {
+                    this.initializationPromise = this.loadHistoryMessages(true);
+                }
+                await this.initializationPromise;
             };
 
             this.ws.onclose = (event) => {
                 clearTimeout(connectionTimeout);
                 // 检查关闭代码，1006 表示异常关闭
                 if (event.code === 1006) {
-                    console.log(`WebSocket disconnected abnormally: ${event.code} - ${event.reason}`);
                     // 只有在不是主动关闭的情况下才重连
                     if (!this.isIntentionalClose) {
                         this.handleWebSocketReconnect();
                     }
-                } else {
-                    console.log(`WebSocket closed with code: ${event.code} - ${event.reason}`);
                 }
             };
 
@@ -1111,6 +1112,38 @@ class HomingAIChat extends HTMLElement {
                     animation: none;
                     cursor: not-allowed;
                 }
+
+                /* WebSocket 重连加载动画样式 */
+                @keyframes spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+
+                .reconnecting-overlay {
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    background: rgba(0, 0, 0, 0.5);
+                    display: none;
+                    justify-content: center;
+                    align-items: center;
+                    z-index: 10000;
+                }
+
+                .reconnecting-overlay.active {
+                    display: flex;
+                }
+
+                .spinner {
+                    width: 50px;
+                    height: 50px;
+                    border: 5px solid #f3f3f3;
+                    border-top: 5px solid #8A2BE2;
+                    border-radius: 50%;
+                    animation: spin 1s linear infinite;
+                }
             </style>
 
             <div class="chat-wrapper">
@@ -1420,29 +1453,59 @@ class HomingAIChat extends HTMLElement {
 
     async stopRecording() {
         if (this.mediaRecorder && this.isRecording) {
-            // Play done sound when stopping recording
-            await this.doneSound.play();
+            try {
+                // Play done sound when stopping recording
+                await this.doneSound.play();
 
-            clearInterval(this.recordingTimer);
-            this.recordingTimer = null;
+                // 清理计时器
+                if (this.recordingTimer) {
+                    clearInterval(this.recordingTimer);
+                    this.recordingTimer = null;
+                }
 
-            this.mediaRecorder.stop();
-            this.isRecording = false;
+                this.mediaRecorder.stop();
+                this.isRecording = false;
 
-            // 更新 UI
-            const recordButton = this.shadowRoot.getElementById('recordButton');
-            const inputWrapper = this.shadowRoot.querySelector('.input-wrapper');
-            const chatWrapper = this.shadowRoot.querySelector('.chat-wrapper');
+                // 更新 UI - 移除所有录音相关的类
+                const recordButton = this.shadowRoot.getElementById('recordButton');
+                const inputWrapper = this.shadowRoot.querySelector('.input-wrapper');
+                const chatWrapper = this.shadowRoot.querySelector('.chat-wrapper');
+                const voiceWaveContainer = this.shadowRoot.querySelector('.voice-wave-container');
+                const recordingOverlay = this.shadowRoot.querySelector('.recording-overlay');
 
-            if (recordButton) {
-                recordButton.classList.remove('recording');
-                recordButton.setAttribute('aria-label', '开始录音');
-            }
-            if (inputWrapper) {
-                inputWrapper.classList.remove('recording');
-            }
-            if (chatWrapper) {  // 从 chat-wrapper 移除录音状态
-                chatWrapper.classList.remove('recording');
+                // 移除所有录音相关的类和状态
+                if (recordButton) {
+                    recordButton.classList.remove('recording');
+                    recordButton.classList.remove('mic-button-recording');
+                    recordButton.setAttribute('aria-label', '开始录音');
+                    recordButton.removeAttribute('title'); // 移除录音时间提示
+                }
+                
+                if (inputWrapper) {
+                    inputWrapper.classList.remove('recording');
+                }
+                
+                if (chatWrapper) {
+                    chatWrapper.classList.remove('recording');
+                }
+                
+                // 确保波形动画和遮罩层被隐藏
+                if (voiceWaveContainer) {
+                    voiceWaveContainer.style.opacity = '0';
+                }
+                
+                if (recordingOverlay) {
+                    recordingOverlay.style.opacity = '0';
+                    recordingOverlay.style.pointerEvents = 'none';
+                }
+
+                // 重置录音状态文本
+                const recordingStatus = this.shadowRoot.querySelector('.recording-status');
+                if (recordingStatus) {
+                    recordingStatus.textContent = '正在聆听...';
+                }
+            } catch (error) {
+                console.error('Error stopping recording:', error);
             }
         }
     }
@@ -1572,9 +1635,6 @@ class HomingAIChat extends HTMLElement {
             this.processingTimeout = null;
         }
         this.resetAudioContext();
-
-        // 清理 websocket_name
-        this.websocket_name = null;
     }
 
     audioBufferToWav(buffer) {
@@ -1638,7 +1698,8 @@ class HomingAIChat extends HTMLElement {
                 },
                 body: JSON.stringify({
                     content: message,
-                    user_name: this.currentUser || 'Unknown User'
+                    user_name: this.currentUser || 'Unknown User',
+                    wss_user_name: this.websocket_name
                 })
             });
 
@@ -1649,15 +1710,18 @@ class HomingAIChat extends HTMLElement {
             const chatResult = await chatResponse.json();
 
             if (chatResult.code === 200 && chatResult.msg) {
+           
+                
                 // 更新最后消息时间戳
                 if (chatResult.created_at) {
                     this.lastMessageTime = chatResult.created_at;
-
                 }
-
 
                 if (needTTS) {
                     try {
+                        // Add iPhone detection
+                        const isIPhone = /iPhone/i.test(navigator.userAgent);
+                        
                         const ttsResponse = await fetch('https://api.homingai.com/ha/home/tts', {
                             method: 'POST',
                             headers: {
@@ -1667,7 +1731,7 @@ class HomingAIChat extends HTMLElement {
                             body: JSON.stringify({
                                 text: chatResult.msg,
                                 user_name: this.websocket_name || 'Unknown User',
-                                option: 2
+                                option: isIPhone ? 2 : 1  // Set option=2 for iPhone, 1 for other devices
                             })
                         });
 
@@ -1910,12 +1974,10 @@ class HomingAIChat extends HTMLElement {
         try {
             // 如果是完成标志则返回
             if (data.is_complete === true) {
-                console.log('[Audio] Received complete signal');
                 return;
             }
 
             if (!data.body) {
-                console.log('[Audio] No audio data received');
                 return;
             }
 
@@ -1940,7 +2002,6 @@ class HomingAIChat extends HTMLElement {
 
                 // 使用 Promise 包装 push 操作，使其异步执行
                 await Promise.resolve().then(() => {
-                    console.log('[Audio] Adding data to queue, queue length:', this.audioQueue.length);
                     this.audioQueue.push(audioData);
                 });
 
@@ -1953,46 +2014,28 @@ class HomingAIChat extends HTMLElement {
             }
 
         } catch (error) {
-            console.error('[Audio] Error handling audio message:', error);
+            // 保留错误处理但移除日志
         }
-
     }
 
     // 添加处理音频队列的方法
     async processAudioQueue() {
-        console.log('[Audio] Process queue - isProcessing:', this.isProcessing, 
-                    'Queue length:', this.audioQueue.length,
-                    'SourceBuffer state:', this.sourceBuffer?.updating,
-                    'MediaSource state:', this.mediaSource?.readyState);
-
         if (this.isProcessing || !this.sourceBuffer || this.audioQueue.length === 0) {
-            console.log('[Audio] Queue processing skipped');
             return;
         }
 
         try {
             this.isProcessing = true;
             const audioData = this.audioQueue.shift();
-            console.log('[Audio] Processing next chunk, remaining queue:', this.audioQueue.length);
             
             if (!this.sourceBuffer.updating && this.mediaSource.readyState === 'open') {
-                console.log('[Audio] Appending buffer to sourceBuffer');
                 await this.sourceBuffer.appendBuffer(audioData);
                 
-                // 如果音频未播放，开始播放
                 if (this.audioElement.paused) {
-                    console.log('[Audio] Starting playback');
                     await this.audioElement.play();
-                } else {
-                    console.log('[Audio] Audio is already playing');
                 }
-            } else {
-                console.log('[Audio] Cannot append buffer - SourceBuffer updating:', 
-                            this.sourceBuffer.updating,
-                            'MediaSource state:', this.mediaSource.readyState);
             }
         } catch (error) {
-            console.error('[Audio] Error processing audio queue:', error);
             this.isProcessing = false;
         }
     }
@@ -2022,6 +2065,12 @@ class HomingAIChat extends HTMLElement {
 
     // 处理 WebSocket 重连
     handleWebSocketReconnect() {
+        // 显示重连加载动画
+        const reconnectingOverlay = this.shadowRoot.querySelector('.reconnecting-overlay');
+        if (reconnectingOverlay) {
+            reconnectingOverlay.classList.add('active');
+        }
+
         if (this.wsReconnectTimer) {
             clearTimeout(this.wsReconnectTimer);
             this.wsReconnectTimer = null;
@@ -2034,6 +2083,10 @@ class HomingAIChat extends HTMLElement {
         this.lastReconnectAttempt = now;
 
         if (this.wsReconnectAttempts >= this.maxReconnectAttempts) {
+            // 隐藏重连加载动画
+            if (reconnectingOverlay) {
+                reconnectingOverlay.classList.remove('active');
+            }
             this.addMessage('连接失败，请刷新页面重试', 'bot');
             return;
         }
@@ -2043,6 +2096,10 @@ class HomingAIChat extends HTMLElement {
 
         this.wsReconnectTimer = setTimeout(async () => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                // 隐藏重连加载动画
+                if (reconnectingOverlay) {
+                    reconnectingOverlay.classList.remove('active');
+                }
                 return;
             }
 
@@ -2107,7 +2164,6 @@ class HomingAIChat extends HTMLElement {
 
     // 添加音频上下文初始化方法
     async initializeAudioContext() {
-        
         if (!this.audioContext) {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
         }
@@ -2129,31 +2185,81 @@ class HomingAIChat extends HTMLElement {
                     try {
                         this.sourceBuffer = this.mediaSource.addSourceBuffer('audio/mpeg');
                         this.sourceBuffer.addEventListener('updateend', () => {
-                            console.log('[Audio] SourceBuffer update ended');
                             this.isProcessing = false;
                             this.processAudioQueue();
                             
                             if (this.audioElement.paused) {
-                                this.audioElement.play().catch(error => {
-                                    console.error('[Audio] Error starting playback:', error);
-                                });
+                                this.audioElement.play().catch(() => {});
                             }
                         });
                         resolve();
                     } catch (error) {
-                        console.error('[Audio] Error initializing source buffer:', error);
+                        // 保留错误处理但移除日志
                     }
                 });
             });
         }
 
         if (this.audioContext.state === 'suspended') {
-            console.log('[Audio] Resuming suspended audio context');
             await this.audioContext.resume();
         }
     }
-}
 
+    // 添加 resetAudioContext 方法
+    resetAudioContext() {
+        try {
+            // 停止并清理当前音频上下文
+            if (this.audioContext) {
+                this.audioContext.close().catch(() => {});
+                this.audioContext = null;
+            }
+
+            // 清理音频元素
+            if (this.audioElement) {
+                this.audioElement.pause();
+                this.audioElement.src = '';
+                this.audioElement.load();
+                this.audioElement = null;
+            }
+
+            // 清理媒体源
+            if (this.mediaSource) {
+                if (this.mediaSource.readyState === 'open') {
+                    this.mediaSource.endOfStream();
+                }
+                this.mediaSource = null;
+            }
+
+            // 清理源缓冲区
+            if (this.sourceBuffer) {
+                try {
+                    if (!this.sourceBuffer.updating) {
+                        this.sourceBuffer.abort();
+                    }
+                } catch (e) {
+                    // 忽略清理过程中的错误
+                }
+                this.sourceBuffer = null;
+            }
+
+            // 清理当前音频源
+            if (this.currentSource) {
+                try {
+                    this.currentSource.disconnect();
+                } catch (e) {
+                    // 忽略清理过程中的错误
+                }
+                this.currentSource = null;
+            }
+
+            // 重置其他相关状态
+            this.isProcessing = false;
+            this.audioQueue = [];
+        } catch (error) {
+            console.warn('Error resetting audio context:', error);
+        }
+    }
+}
 // 注册自定义元素
 if (!customElements.get('homingai-chat')) {
     customElements.define('homingai-chat', HomingAIChat);
