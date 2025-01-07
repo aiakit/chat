@@ -39,16 +39,12 @@ class HomingAIChat extends HTMLElement {
 
         // 音频相关
         this.audioContext = null;
-        this.isPlaying = false;
+        this.mediaSource = null;
+        this.sourceBuffer = null;
+        this.audioElement = null;
+        this.audioQueue = [];
+        this.isProcessing = false;
         this.currentSource = null;
-        this.playbackAudioContext = null;
-        this.playbackQueue = [];
-        this.audioBufferCache = [];
-        this.bufferThreshold = 3;
-
-        // 状态标记
-        this.isIntentionalClose = false;
-        this.lastMessageTime = null;
     }
 
     // 设置 Home Assistant 实例
@@ -1770,24 +1766,22 @@ class HomingAIChat extends HTMLElement {
 
     // 修改 playAudio 方法
     playAudio(audioUrl) {
-        // 如果正在录音，才停止当前播放
-        if (this.isRecording) {
-            this.stopCurrentAudio();
-        }
+        // 先停止当前正在播放的音频
+        this.stopCurrentAudio();
 
         const audio = new Audio();
         this.currentAudio = audio;
-        this.isPlaying = true;
 
         // 添加音频事件监听器
         audio.addEventListener('error', (e) => {
-            this.isPlaying = false;
+            console.error('Audio playback error:', e);
+            URL.revokeObjectURL(audioUrl); // 释放URL
+            this.currentAudio = null;
         });
 
         audio.addEventListener('ended', () => {
-            this.isPlaying = false;
+            URL.revokeObjectURL(audioUrl); // 释放URL
             this.currentAudio = null;
-            URL.revokeObjectURL(audioUrl);
         });
 
         // iOS Safari 需要设置这些属性
@@ -1799,26 +1793,35 @@ class HomingAIChat extends HTMLElement {
         const playPromise = audio.play();
         if (playPromise !== undefined) {
             playPromise.catch(error => {
-                this.isPlaying = false;
+                console.error('Audio play failed:', error);
+                URL.revokeObjectURL(audioUrl); // 释放URL
+                this.currentAudio = null;
             });
         }
     }
 
-
     // 修改 stopCurrentAudio 方法
     stopCurrentAudio() {
-        if (this.currentSource) {
+        if (this.currentAudio) {
             try {
-                this.currentSource.stop();
-                this.currentSource.disconnect();
+                this.currentAudio.pause();
+                this.currentAudio.currentTime = 0;
+                const currentSrc = this.currentAudio.src;
+                this.currentAudio.src = ''; // 清除源
+                this.currentAudio.load(); // 重置音频元素
+                if (currentSrc.startsWith('blob:')) {
+                    URL.revokeObjectURL(currentSrc); // 释放blob URL
+                }
             } catch (error) {
-                console.warn('Error stopping current audio:', error);
+                console.warn('Error stopping audio:', error);
             }
-            this.currentSource = null;
+            this.currentAudio = null;
         }
 
+        // 重置所有音频相关状态
         this.isPlaying = false;
-        this.playbackQueue = [];
+        this.audioQueue = [];
+        this.isProcessing = false;
     }
 
     // 添加音频转换辅助方法
@@ -1892,154 +1895,200 @@ class HomingAIChat extends HTMLElement {
     }
 
     // 处理音频消息
-    handleAudioMessage(data) {
+    async handleAudioMessage(data) {
+        try {
+            // 如果是完成标志则返回
+            if (data.is_complete === true) {
+                console.log('[Audio] Received complete signal');
+                return;
+            }
+
+            if (!data.body) {
+                console.log('[Audio] No audio data received');
+                return;
+            }
+
+            console.log('[Audio] Initializing audio context...');
+            // 确保音频上下文已初始化
+            await this.initializeAudioContext();
+
+            // 处理音频数据
+            let audioData;
+            if (data.body instanceof ArrayBuffer) {
+                console.log('[Audio] Data is ArrayBuffer');
+                audioData = data.body;
+            } else if (typeof data.body === 'string') {
+                console.log('[Audio] Data is base64 string, converting to ArrayBuffer');
+                audioData = this.base64ToArrayBuffer(data.body);
+            } else if (data.body instanceof Uint8Array) {
+                console.log('[Audio] Data is Uint8Array, getting buffer');
+                audioData = data.body.buffer;
+            }
+
+            if (audioData) {
+                console.log('[Audio] Adding data to queue, queue length:', this.audioQueue.length);
+                this.audioQueue.push(audioData);
+                console.log('[Audio] Processing queue...');
+                await this.processAudioQueue();
+            }
+
+        } catch (error) {
+            console.error('[Audio] Error handling audio message:', error);
+        }
+    }
+
+    // 添加播放队列中下一个音频的方法
+    async playNextInQueue() {
+        if (this.audioQueue.length === 0 || this.isPlayingAudio) {
+            return;
+        }
+
+        this.isPlayingAudio = true;
+        const audioUrl = this.audioQueue[0];
+
+        try {
+            await this.playAudioSegment(audioUrl);
+            // 播放成功后从队列中移除
+            this.audioQueue.shift();
+        } catch (error) {
+            console.error('Failed to play audio from queue:', error);
+            // 出错时也从队列中移除
+            this.audioQueue.shift();
+            URL.revokeObjectURL(audioUrl);
+        } finally {
+            this.isPlayingAudio = false;
+            // 检查是否还有更多音频需要播放
+            if (this.audioQueue.length > 0) {
+                await this.playNextInQueue();
+            }
+        }
+    }
+
+    // 修改 playAudioSegment 方法
+    async playAudioSegment(audioUrl) {
+        // 停止当前正在播放的音频
+        this.stopCurrentAudio();
+
+        return new Promise((resolve, reject) => {
+            const audio = new Audio();
+            this.currentAudio = audio;
+
+            // 设置音频属性
+            audio.setAttribute('playsinline', 'true');
+            audio.setAttribute('webkit-playsinline', 'true');
+            audio.preload = 'auto';
+            audio.src = audioUrl;
+
+            // 错误处理
+            audio.addEventListener('error', (e) => {
+                console.error('Audio playback error:', e);
+                this.currentAudio = null;
+                URL.revokeObjectURL(audioUrl);
+                reject(e);
+            });
+
+            // 播放完成处理
+            audio.addEventListener('ended', () => {
+                this.currentAudio = null;
+                URL.revokeObjectURL(audioUrl);
+                resolve();
+            });
+
+            // 开始播放
+            audio.play().catch(error => {
+                console.error('Failed to play audio segment:', error);
+                this.currentAudio = null;
+                URL.revokeObjectURL(audioUrl);
+                reject(error);
+            });
+        });
+    }
+
+    // 添加初始化MediaSource的方法
+    async initializeMediaSource() {
         return new Promise((resolve, reject) => {
             try {
-                // 如果没有初始化播放上下文，先初始化
-                if (!this.playbackAudioContext) {
-                    this.playbackAudioContext = new (window.AudioContext || window.webkitAudioContext)();
-                }
+                this.mediaSource = new MediaSource();
+                this.audioElement = new Audio();
+                this.audioElement.src = URL.createObjectURL(this.mediaSource);
 
-                // 如果是完成标志
-                if (data.is_complete === true) {
-                    const processLastChunk = async () => {
-                        // 如果还有最后一段音频数据，先处理它
-                        if (data.body) {
-                            let audioData;
-                            if (data.body instanceof ArrayBuffer) {
-                                audioData = data.body;
-                            } else if (typeof data.body === 'string') {
-                                audioData = this.base64ToArrayBuffer(data.body);
-                            } else if (data.body instanceof Uint8Array) {
-                                audioData = data.body.buffer;
-                            }
+                // 设置音频元素属性
+                this.audioElement.setAttribute('playsinline', 'true');
+                this.audioElement.setAttribute('webkit-playsinline', 'true');
+                this.audioElement.preload = 'auto';
 
-                            if (audioData) {
-                                try {
-                                    const audioBuffer = await this.playbackAudioContext.decodeAudioData(audioData);
-                                    // 只有在录音时才会打断当前播放
-                                    if (!this.isRecording) {
-                                        this.audioBufferCache.push(audioBuffer);
-                                    }
-                                } catch (error) {
-                                    console.error('Failed to decode last audio chunk:', error);
-                                }
-                            }
-                        }
-
-                        // 合并并播放所有缓存的buffer
-                        if (this.audioBufferCache.length > 0) {
-                            this.mergeAndPlayBuffers();
-                        }
-                    };
-
-                    // 处理最后的数据并返回
-                    processLastChunk().then(resolve).catch(reject);
-                    return;
-                }
-
-                if (!data.body) {
-                    resolve();
-                    return;
-                }
-
-                // 处理不同格式的音频数据
-                let audioData;
-                if (data.body instanceof ArrayBuffer) {
-                    audioData = data.body;
-                } else if (typeof data.body === 'string') {
-                    audioData = this.base64ToArrayBuffer(data.body);
-                } else if (data.body instanceof Uint8Array) {
-                    audioData = data.body.buffer;
-                } else {
-                    reject(new Error('Unsupported audio data format'));
-                    return;
-                }
-
-                // 解码音频数据
-                this.playbackAudioContext.decodeAudioData(
-                    audioData,
-                    (audioBuffer) => {
-                        this.audioBufferCache.push(audioBuffer);
+                this.mediaSource.addEventListener('sourceopen', () => {
+                    try {
+                        this.sourceBuffer = this.mediaSource.addSourceBuffer('audio/mpeg');
                         
-                        // 当缓存达到阈值时，合并并添加到播放队列
-                        if (this.audioBufferCache.length >= this.bufferThreshold) {
-                            this.mergeAndPlayBuffers();
-                        }
+                        // 监听sourceBuffer的updateend事件
+                        this.sourceBuffer.addEventListener('updateend', () => {
+                            this.isProcessing = false;
+                            this.processAudioQueue();
+                            
+                            // 如果缓冲区有数据且音频未播放，开始播放
+                            if (!this.audioElement.paused) {
+                                this.audioElement.play().catch(console.error);
+                            }
+                        });
+
                         resolve();
-                    },
-                    (error) => {
-                        console.error('Audio decoding error:', error);
+                    } catch (error) {
                         reject(error);
                     }
-                );
+                });
+
+                // 音频播放结束时清理资源
+                this.audioElement.addEventListener('ended', () => {
+                    if (this.mediaSource.readyState === 'open') {
+                        this.mediaSource.endOfStream();
+                    }
+                    URL.revokeObjectURL(this.audioElement.src);
+                });
+
             } catch (error) {
-                console.error('Audio message handling error:', error);
                 reject(error);
             }
         });
     }
 
-    // 合并缓存的音频buffer并添加到播放队列
-    mergeAndPlayBuffers() {
-        if (this.audioBufferCache.length === 0) return;
+    // 添加处理音频队列的方法
+    async processAudioQueue() {
+        console.log('[Audio] Process queue - isProcessing:', this.isProcessing, 
+                    'Queue length:', this.audioQueue.length,
+                    'SourceBuffer state:', this.sourceBuffer?.updating,
+                    'MediaSource state:', this.mediaSource?.readyState);
 
-        // 计算总长度
-        const totalLength = this.audioBufferCache.reduce((total, buffer) => 
-            total + buffer.length, 0);
-
-        // 创建新的AudioBuffer
-        const mergedBuffer = this.playbackAudioContext.createBuffer(
-            1,  // 单声道
-            totalLength,
-            this.playbackAudioContext.sampleRate
-        );
-
-        // 合并所有buffer
-        let offset = 0;
-        for (const buffer of this.audioBufferCache) {
-            mergedBuffer.copyToChannel(buffer.getChannelData(0), 0, offset);
-            offset += buffer.length;
+        if (this.isProcessing || !this.sourceBuffer || this.audioQueue.length === 0) {
+            console.log('[Audio] Queue processing skipped');
+            return;
         }
 
-        // 清空缓存
-        this.audioBufferCache = [];
-
-        // 添加到播放队列
-        this.playbackQueue.push(mergedBuffer);
-        
-        // 如果当前没有播放，开始播放
-        if (!this.isPlaying) {
-            this.schedulePlayback();
+        try {
+            this.isProcessing = true;
+            const audioData = this.audioQueue.shift();
+            console.log('[Audio] Processing next chunk, remaining queue:', this.audioQueue.length);
+            
+            if (!this.sourceBuffer.updating && this.mediaSource.readyState === 'open') {
+                console.log('[Audio] Appending buffer to sourceBuffer');
+                await this.sourceBuffer.appendBuffer(audioData);
+                
+                // 如果音频未播放，开始播放
+                if (this.audioElement.paused) {
+                    console.log('[Audio] Starting playback');
+                    await this.audioElement.play();
+                } else {
+                    console.log('[Audio] Audio is already playing');
+                }
+            } else {
+                console.log('[Audio] Cannot append buffer - SourceBuffer updating:', 
+                            this.sourceBuffer.updating,
+                            'MediaSource state:', this.mediaSource.readyState);
+            }
+        } catch (error) {
+            console.error('[Audio] Error processing audio queue:', error);
+            this.isProcessing = false;
         }
-    }
-
-    // 调度播放队列中的音频
-    schedulePlayback() {
-        if (this.isPlaying) return;
-        if (this.playbackQueue.length === 0) return;
-
-        // 获取下一个缓冲区
-        const buffer = this.playbackQueue.shift();
-
-        // 创建音频源
-        const source = this.playbackAudioContext.createBufferSource();
-        source.buffer = buffer;
-        source.connect(this.playbackAudioContext.destination);
-
-        // 开始播放
-        source.start(0);  // 直接从0开始播放
-
-        // 标记为正在播放
-        this.isPlaying = true;
-
-        // 处理播放结束
-        source.onended = () => {
-            source.disconnect();
-            this.isPlaying = false;
-            // 继续播放队列中的下一个缓冲区
-            this.schedulePlayback();
-        };
     }
 
     // 修改 base64ToArrayBuffer 方法，添加错误处理
@@ -2148,6 +2197,62 @@ class HomingAIChat extends HTMLElement {
         // 检查是否滚动到顶部附近
         // this.loadingThreshold 在构造函数中已定义为 100
         return container.scrollTop <= this.loadingThreshold;
+    }
+
+    // 添加音频上下文初始化方法
+    async initializeAudioContext() {
+        console.log('[Audio] Initializing audio context...');
+        
+        if (!this.audioContext) {
+            console.log('[Audio] Creating new AudioContext');
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        if (!this.audioElement) {
+            console.log('[Audio] Setting up new audio element and MediaSource');
+            this.mediaSource = new MediaSource();
+            this.audioElement = new Audio();
+            this.audioElement.src = URL.createObjectURL(this.mediaSource);
+            
+            console.log('[Audio] Creating and connecting media element source');
+            this.currentSource = this.audioContext.createMediaElementSource(this.audioElement);
+            this.currentSource.connect(this.audioContext.destination);
+
+            this.audioElement.setAttribute('playsinline', 'true');
+            this.audioElement.setAttribute('webkit-playsinline', 'true');
+            this.audioElement.preload = 'auto';
+
+            await new Promise((resolve) => {
+                this.mediaSource.addEventListener('sourceopen', () => {
+                    try {
+                        console.log('[Audio] MediaSource opened, adding source buffer');
+                        this.sourceBuffer = this.mediaSource.addSourceBuffer('audio/mpeg');
+                        this.sourceBuffer.addEventListener('updateend', () => {
+                            console.log('[Audio] SourceBuffer update ended');
+                            this.isProcessing = false;
+                            this.processAudioQueue();
+                            
+                            if (this.audioElement.paused) {
+                                console.log('[Audio] Starting playback after buffer update');
+                                this.audioElement.play().catch(error => {
+                                    console.error('[Audio] Error starting playback:', error);
+                                });
+                            }
+                        });
+                        resolve();
+                    } catch (error) {
+                        console.error('[Audio] Error initializing source buffer:', error);
+                    }
+                });
+            });
+        }
+
+        if (this.audioContext.state === 'suspended') {
+            console.log('[Audio] Resuming suspended audio context');
+            await this.audioContext.resume();
+        }
+        
+        console.log('[Audio] Audio context initialization complete');
     }
 }
 
