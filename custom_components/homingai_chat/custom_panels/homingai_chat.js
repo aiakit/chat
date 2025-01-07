@@ -265,10 +265,15 @@ class HomingAIChat extends HTMLElement {
 
     // 修改 WebSocket 初始化方法
     initWebSocket() {
+        // 显示重连动画
+        const reconnectingOverlay = this.shadowRoot.querySelector('.reconnecting-overlay');
+        reconnectingOverlay.classList.add('active');
+
         // 如果已经有活跃的连接，先检查它的状态
         if (this.ws) {
-            // 如果连接正常，直接返回
+            // 如果连接正常，隐藏动画并返回
             if (this.ws.readyState === WebSocket.OPEN) {
+                reconnectingOverlay.classList.remove('active');
                 return;
             }
             // 如果连接正在建立中，等待它完成
@@ -282,6 +287,7 @@ class HomingAIChat extends HTMLElement {
 
         try {
             if (!this.access_token) {
+                reconnectingOverlay.classList.remove('active');
                 return;
             }
 
@@ -303,6 +309,9 @@ class HomingAIChat extends HTMLElement {
 
             // 修改事件处理逻辑
             this.ws.onopen = async () => {
+                // 连接成功时隐藏重连动画
+                reconnectingOverlay.classList.remove('active');
+                
                 // 使用 Promise 确保只加载一次
                 if (!this.initializationPromise) {
                     this.initializationPromise = this.loadHistoryMessages(true);
@@ -313,6 +322,8 @@ class HomingAIChat extends HTMLElement {
 
             this.ws.onclose = (event) => {
                 this.addMessage('连接已断开', 'bot');
+                // 连接关闭时显示重连动画
+                reconnectingOverlay.classList.add('active');
             };
 
             // 保持原有的消息处理逻辑
@@ -358,10 +369,14 @@ class HomingAIChat extends HTMLElement {
 
             this.ws.onerror = (error) => {
                 this.addMessage('连接发生错误', 'bot');
+                // 连接错误时显示重连动画
+                reconnectingOverlay.classList.add('active');
             };
 
         } catch (error) {
             this.addMessage('连接失败: ' + error.message, 'bot');
+            // 连接失败时隐藏重连动画
+            reconnectingOverlay.classList.remove('active');
         }
     }
 
@@ -1116,6 +1131,10 @@ class HomingAIChat extends HTMLElement {
                     animation: spin 1s linear infinite;
                 }
             </style>
+
+            <div class="reconnecting-overlay">
+                <div class="spinner"></div>
+            </div>
 
             <div class="chat-wrapper">
                 <!-- 录音遮罩 -->
@@ -1878,7 +1897,7 @@ class HomingAIChat extends HTMLElement {
 
         // 添加音频事件监听器
         audio.addEventListener('error', (e) => {
-            console.error('Audio playback error:', e);
+            this.addMessage('音频播放错误: ' + e.message, 'bot');  // 添加到聊天框
             URL.revokeObjectURL(audioUrl); // 释放URL
             this.currentAudio = null;
         });
@@ -1897,7 +1916,7 @@ class HomingAIChat extends HTMLElement {
         const playPromise = audio.play();
         if (playPromise !== undefined) {
             playPromise.catch(error => {
-                console.error('Audio play failed:', error);
+                this.addMessage('音频播放失败: ' + error.message, 'bot');  // 添加到聊天框
                 URL.revokeObjectURL(audioUrl); // 释放URL
                 this.currentAudio = null;
             });
