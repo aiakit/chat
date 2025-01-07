@@ -1890,7 +1890,7 @@ class HomingAIChat extends HTMLElement {
                 break;
 
             default:
-                console.log('Unknown message type:', data.message_type);
+                break;
         }
     }
 
@@ -2028,13 +2028,15 @@ class HomingAIChat extends HTMLElement {
                             
                             // 如果缓冲区有数据且音频未播放，开始播放
                             if (!this.audioElement.paused) {
-                                this.audioElement.play().catch(console.error);
+                                this.audioElement.play().catch(error => {
+                                    console.error('[Audio] Error starting playback:', error);
+                                });
                             }
                         });
 
                         resolve();
                     } catch (error) {
-                        reject(error);
+                        console.error('[Audio] Error initializing source buffer:', error);
                     }
                 });
 
@@ -2054,36 +2056,20 @@ class HomingAIChat extends HTMLElement {
 
     // 添加处理音频队列的方法
     async processAudioQueue() {
-        console.log('[Audio] Process queue - isProcessing:', this.isProcessing, 
-                    'Queue length:', this.audioQueue.length,
-                    'SourceBuffer state:', this.sourceBuffer?.updating,
-                    'MediaSource state:', this.mediaSource?.readyState);
-
         if (this.isProcessing || !this.sourceBuffer || this.audioQueue.length === 0) {
-            console.log('[Audio] Queue processing skipped');
             return;
         }
 
         try {
             this.isProcessing = true;
             const audioData = this.audioQueue.shift();
-            console.log('[Audio] Processing next chunk, remaining queue:', this.audioQueue.length);
             
             if (!this.sourceBuffer.updating && this.mediaSource.readyState === 'open') {
-                console.log('[Audio] Appending buffer to sourceBuffer');
                 await this.sourceBuffer.appendBuffer(audioData);
                 
-                // 如果音频未播放，开始播放
                 if (this.audioElement.paused) {
-                    console.log('[Audio] Starting playback');
                     await this.audioElement.play();
-                } else {
-                    console.log('[Audio] Audio is already playing');
                 }
-            } else {
-                console.log('[Audio] Cannot append buffer - SourceBuffer updating:', 
-                            this.sourceBuffer.updating,
-                            'MediaSource state:', this.mediaSource.readyState);
             }
         } catch (error) {
             console.error('[Audio] Error processing audio queue:', error);
@@ -2201,20 +2187,15 @@ class HomingAIChat extends HTMLElement {
 
     // 添加音频上下文初始化方法
     async initializeAudioContext() {
-        console.log('[Audio] Initializing audio context...');
-        
         if (!this.audioContext) {
-            console.log('[Audio] Creating new AudioContext');
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
         }
 
         if (!this.audioElement) {
-            console.log('[Audio] Setting up new audio element and MediaSource');
             this.mediaSource = new MediaSource();
             this.audioElement = new Audio();
             this.audioElement.src = URL.createObjectURL(this.mediaSource);
             
-            console.log('[Audio] Creating and connecting media element source');
             this.currentSource = this.audioContext.createMediaElementSource(this.audioElement);
             this.currentSource.connect(this.audioContext.destination);
 
@@ -2225,15 +2206,12 @@ class HomingAIChat extends HTMLElement {
             await new Promise((resolve) => {
                 this.mediaSource.addEventListener('sourceopen', () => {
                     try {
-                        console.log('[Audio] MediaSource opened, adding source buffer');
                         this.sourceBuffer = this.mediaSource.addSourceBuffer('audio/mpeg');
                         this.sourceBuffer.addEventListener('updateend', () => {
-                            console.log('[Audio] SourceBuffer update ended');
                             this.isProcessing = false;
                             this.processAudioQueue();
                             
                             if (this.audioElement.paused) {
-                                console.log('[Audio] Starting playback after buffer update');
                                 this.audioElement.play().catch(error => {
                                     console.error('[Audio] Error starting playback:', error);
                                 });
@@ -2248,11 +2226,8 @@ class HomingAIChat extends HTMLElement {
         }
 
         if (this.audioContext.state === 'suspended') {
-            console.log('[Audio] Resuming suspended audio context');
             await this.audioContext.resume();
         }
-        
-        console.log('[Audio] Audio context initialization complete');
     }
 }
 
