@@ -24,9 +24,6 @@ class HomingAIChat extends HTMLElement {
         this.currentUser = null;
         this._hass = null;
         this.ws = null;
-        this.wsReconnectTimer = null;
-        this.wsReconnectAttempts = 0;
-        this.maxReconnectAttempts = 5;
         this.tokenCache = null;
         this.TOKEN_CACHE_KEY = 'homingai_token_cache';
 
@@ -113,9 +110,6 @@ class HomingAIChat extends HTMLElement {
                 if (token) {
                     this.access_token = token.trim();
                     this.initializeEventListeners();
-
-                    // 只初始化 WebSocket，不直接加载历史消息
-                    this.initWebSocket();
                 } else {
                     throw new Error('Invalid token');
                 }
@@ -229,14 +223,6 @@ class HomingAIChat extends HTMLElement {
 
                 const messages = result.data.data;
 
-                if (!messages || messages.length === 0) {
-                    this.hasMore = false;
-                    if (!isInitial) {
-                        this.showNoMoreMessage();
-                    }
-                    return;
-                }
-
                 // 渲染消息
                 const fragment = document.createDocumentFragment();
                 messages.reverse().forEach(msg => {
@@ -271,7 +257,7 @@ class HomingAIChat extends HTMLElement {
                 this.hasMore = messages.length >= this.pageSize;
             }
         } catch (error) {
-            this.showErrorMessage();
+            this.addMessage('加载历史消息失败: ' + error.message, 'bot');
         } finally {
             this.isLoading = false;
         }
@@ -311,58 +297,34 @@ class HomingAIChat extends HTMLElement {
 
             this.ws = new WebSocket(wsUrl.toString());
 
-            // 添加连接超时处理
-            const connectionTimeout = setTimeout(() => {
-                if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
-                    this.ws.close();
-                    this.handleWebSocketReconnect();
-                }
-            }, 10000);
-
             // 添加网络状态监听
             window.addEventListener('online', this.handleOnline.bind(this));
             window.addEventListener('offline', this.handleOffline.bind(this));
 
-            // 保持原有的事件处理逻辑
+            // 修改事件处理逻辑
             this.ws.onopen = async () => {
-                clearTimeout(connectionTimeout);  // 现在可以正常清除了
-                this.wsReconnectAttempts = 0;
-                this.isIntentionalClose = false;
-
-                // 隐藏重连加载动画
-                const reconnectingOverlay = this.shadowRoot.querySelector('.reconnecting-overlay');
-                if (reconnectingOverlay) {
-                    reconnectingOverlay.classList.remove('active');
-                }
-
                 // 使用 Promise 确保只加载一次
                 if (!this.initializationPromise) {
                     this.initializationPromise = this.loadHistoryMessages(true);
                 }
                 await this.initializationPromise;
+                this.addMessage('连接成功', 'bot');
             };
 
-            // 保持原有的 onclose 处理
             this.ws.onclose = (event) => {
-                clearTimeout(connectionTimeout);  // 现在可以正常清除了
-                // 检查关闭代码，1006 表示异常关闭
-                if (event.code === 1006) {
-                    // 只有在不是主动关闭的情况下才重连
-                    if (!this.isIntentionalClose) {
-                        this.handleWebSocketReconnect();
-                    }
-                }
+                this.addMessage('连接已断开', 'bot');
             };
 
             // 保持原有的消息处理逻辑
             this.ws.onmessage = (event) => {
                 try {
-                    // 如果收到 ping 消息，回复 pong
                     if (event.data === 'ping') {
                         try {
                             this.ws.send('pong');
+                            this.addMessage('WebSocket心跳: Ping-Pong', 'bot');
                         } catch (error) {
-                            console.error('Failed to send pong:', error);
+                            this.addMessage('WebSocket心跳失败: ' + error.message, 'bot');
+                            this.initWebSocket();
                         }
                         return;
                     }
@@ -374,29 +336,32 @@ class HomingAIChat extends HTMLElement {
 
                         try {
                             const data = JSON.parse(message);
-                            this.handleWebSocketMessage(data);
+                            // 添加消息接收日志到聊天框
+                            this.addMessage(`收到消息类型: ${data.message_type}`, 'bot');
+                            
+                            // 确保消息处理正常工作
+                            if (data && typeof data === 'object') {
+                                this.handleWebSocketMessage(data);
+                            } else {
+                                this.addMessage('无效的消息格式: ' + JSON.stringify(data), 'bot');
+                            }
                         } catch (parseError) {
-                            console.error('Failed to parse message:', {
-                                error: parseError,
-                                messagePreview: message.substring(0, 100)
-                            });
+                            this.addMessage('消息解析失败: ' + parseError.message, 'bot');
+                            this.addMessage('消息预览: ' + message.substring(0, 100), 'bot');
                         }
                     }
                 } catch (error) {
-                    console.error('WebSocket message handling error:', error);
+                    this.addMessage('WebSocket消息处理错误: ' + error.message, 'bot');
+                    this.initWebSocket();
                 }
             };
 
             this.ws.onerror = (error) => {
-                clearTimeout(connectionTimeout);  // 现在可以正常清除了
-                // 只在连接未关闭时处理重连
-                if (this.ws && this.ws.readyState !== WebSocket.CLOSING && this.ws.readyState !== WebSocket.CLOSED) {
-                    this.handleWebSocketReconnect();
-                }
+                this.addMessage('连接发生错误', 'bot');
             };
 
         } catch (error) {
-            this.handleWebSocketReconnect();
+            this.addMessage('连接失败: ' + error.message, 'bot');
         }
     }
 
@@ -1665,27 +1630,14 @@ class HomingAIChat extends HTMLElement {
         if (this.mediaRecorder) {
             this.stopRecording();
         }
-        if (this.permissionIframe) {
-            this.permissionIframe.remove();
-            this.permissionIframe = null;
-        }
         // 清理 WebSocket
         if (this.ws) {
-            this.isIntentionalClose = true; // 标记这是一个主动关闭
             this.ws.close(1000, 'Component disconnected');
             this.ws = null;
-        }
-        if (this.wsReconnectTimer) {
-            clearTimeout(this.wsReconnectTimer);
-            this.wsReconnectTimer = null;
         }
 
         // 清理音频相关资源
         this.audioQueue = [];
-        if (this.processingTimeout) {
-            clearTimeout(this.processingTimeout);
-            this.processingTimeout = null;
-        }
         this.resetAudioContext();
 
         // 移除网络状态监听
@@ -1746,6 +1698,12 @@ class HomingAIChat extends HTMLElement {
     // 修改 sendChatMessage 方法
     async sendChatMessage(message, needTTS = false) {
         try {
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                this.addMessage('WebSocket连接异常，正在尝试重新连接...', 'bot');
+                this.initWebSocket();
+                return;
+            }
+
             const chatResponse = await fetch('https://api.homingai.com/ha/home/chat', {
                 method: 'POST',
                 headers: {
@@ -1764,10 +1722,14 @@ class HomingAIChat extends HTMLElement {
             }
 
             const chatResult = await chatResponse.json();
+            
+            // 添加 HTTP 请求结果日志
+            this.addMessage(`HTTP请求结果: ${chatResult.code}`, 'bot');
 
+            // 检查 WebSocket 状态
+            this.addMessage(`WebSocket状态: ${this.ws ? this.ws.readyState : 'undefined'}`, 'bot');
+            
             if (chatResult.code === 200 && chatResult.msg) {
-           
-                
                 // 更新最后消息时间戳
                 if (chatResult.created_at) {
                     this.lastMessageTime = chatResult.created_at;
@@ -1775,8 +1737,10 @@ class HomingAIChat extends HTMLElement {
 
                 if (needTTS) {
                     try {
-                        // Add iPhone detection
                         const isIPhone = /iPhone/i.test(navigator.userAgent);
+                        
+                        // 添加 TTS 请求日志
+                        this.addMessage('正在请求语音合成...', 'bot');
                         
                         const ttsResponse = await fetch('https://api.homingai.com/ha/home/tts', {
                             method: 'POST',
@@ -1787,7 +1751,7 @@ class HomingAIChat extends HTMLElement {
                             body: JSON.stringify({
                                 text: chatResult.msg,
                                 user_name: this.websocket_name || 'Unknown User',
-                                option: isIPhone ? 2 : 1  // Set option=2 for iPhone, 1 for other devices
+                                option: isIPhone ? 2 : 1
                             })
                         });
 
@@ -1796,29 +1760,38 @@ class HomingAIChat extends HTMLElement {
                         }
 
                         const ttsResult = await ttsResponse.json();
+                        
+                        // 添加 TTS 响应日志
+                        this.addMessage(`TTS响应状态: ${ttsResult.code}`, 'bot');
 
-                        // 新增：当 code 为 201 时直接返回，不做任何处理
                         if (ttsResult.code === 201) {
+                            this.addMessage('TTS返回201，跳过音频处理', 'bot');
                             return;
                         }
 
                         if (ttsResult.code === 200 && ttsResult.body) {
                             try {
+                                // 添加音频处理日志
+                                this.addMessage('开始处理音频数据...', 'bot');
+                                
                                 const audioData = this.base64ToBuffer(ttsResult.body);
-                                // 确保音频格式正确
                                 const audioBlob = new Blob([audioData], {
-                                    type: 'audio/wav; codecs=1'  // 指定编解码器
+                                    type: 'audio/wav; codecs=1'
                                 });
                                 const audioUrl = URL.createObjectURL(audioBlob);
-                                this.playAudio(audioUrl);
+                                
+                                // 添加播放日志
+                                this.addMessage('准备播放音频...', 'bot');
+                                await this.playAudio(audioUrl);
+                                this.addMessage('音频播放已开始', 'bot');
                             } catch (error) {
-                                this.addMessage('语音处理失败: ' + error.message, 'bot');
+                                this.addMessage('音频处理失败: ' + error.message, 'bot');
                             }
                         } else {
                             throw new Error('语音合成失败：' + (ttsResult.msg || '未知错误'));
                         }
                     } catch (error) {
-                        console.error('TTS error:', error);
+                        this.addMessage('TTS处理失败: ' + error.message, 'bot');
                     }
                 }
             } else {
@@ -1950,7 +1923,6 @@ class HomingAIChat extends HTMLElement {
         }
 
         // 重置所有音频相关状态
-        this.isPlaying = false;
         this.audioQueue = [];
         this.isProcessing = false;
     }
@@ -1982,46 +1954,58 @@ class HomingAIChat extends HTMLElement {
 
     // 处理 WebSocket 消息
     handleWebSocketMessage(data) {
-        // 更新最后消息时间戳 (对所有消息类型都更新)
-        if (data.created_at) {
-            this.lastMessageTime = data.created_at;
-        }
+        try {
+            // 更新最后消息时间戳 (对所有消息类型都更新)
+            if (data.created_at) {
+                this.lastMessageTime = data.created_at;
+            }
 
-        const messagesContainer = this.shadowRoot.getElementById('messages');
+            const messagesContainer = this.shadowRoot.getElementById('messages');
+            if (!messagesContainer) {
+                console.error('Messages container not found');
+                return;
+            }
 
-        switch (data.message_type) {
-            case 1: // 用户消息
-                const messageElement = this.createMessageElement({
-                    type: 'user',
-                    content: data.content,
-                    timestamp: data.created_at,
-                    showUserName: true,
-                    userName: data.user_name
-                });
+            // 添加消息处理日志
+            console.log('Processing message type:', data.message_type);
 
-                messagesContainer.appendChild(messageElement);
-                messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                break;
+            switch (data.message_type) {
+                case 1: // 用户消息
+                    const messageElement = this.createMessageElement({
+                        type: 'user',
+                        content: data.content,
+                        timestamp: data.created_at,
+                        showUserName: true,
+                        userName: data.user_name
+                    });
 
-            case 2: // 机器人消息
-                const botMessage = this.createMessageElement({
-                    type: 'bot',
-                    content: data.content,
-                    timestamp: data.created_at
-                });
+                    messagesContainer.appendChild(messageElement);
+                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                    break;
 
-                messagesContainer.appendChild(botMessage);
-                messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                break;
+                case 2: // 机器人消息
+                    const botMessage = this.createMessageElement({
+                        type: 'bot',
+                        content: data.content,
+                        timestamp: data.created_at
+                    });
 
-            case 1000: // 实时语音合成
-                this.handleAudioMessage(data).catch(error => {
-                    console.error('Audio message processing error:', error);
-                });
-                break;
+                    messagesContainer.appendChild(botMessage);
+                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                    console.log('Bot message added to container');
+                    break;
 
-            default:
-                console.log('Unknown message type:', data.message_type);
+                case 1000: // 实时语音合成
+                    this.handleAudioMessage(data).catch(error => {
+                        console.error('Audio message processing error:', error);
+                    });
+                    break;
+
+                default:
+                    console.log('Unknown message type:', data.message_type);
+            }
+        } catch (error) {
+            console.error('Error in handleWebSocketMessage:', error);
         }
     }
 
@@ -2119,92 +2103,6 @@ class HomingAIChat extends HTMLElement {
         }
     }
 
-    // 处理 WebSocket 重连
-    handleWebSocketReconnect() {
-        // 显示重连加载动画
-        const reconnectingOverlay = this.shadowRoot.querySelector('.reconnecting-overlay');
-        if (reconnectingOverlay) {
-            reconnectingOverlay.classList.add('active');
-        }
-
-        if (this.wsReconnectTimer) {
-            clearTimeout(this.wsReconnectTimer);
-            this.wsReconnectTimer = null;
-        }
-
-        const now = Date.now();
-        if (this.lastReconnectAttempt && (now - this.lastReconnectAttempt) < 5000) {
-            return;
-        }
-        this.lastReconnectAttempt = now;
-
-        if (this.wsReconnectAttempts >= this.maxReconnectAttempts) {
-            // 隐藏重连加载动画
-            if (reconnectingOverlay) {
-                reconnectingOverlay.classList.remove('active');
-            }
-            this.addMessage('连接失败，请刷新页面重试', 'bot');
-            return;
-        }
-
-        this.wsReconnectAttempts++;
-        const delay = Math.min(2000 * Math.pow(2, this.wsReconnectAttempts), 60000);
-
-        this.wsReconnectTimer = setTimeout(async () => {
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                // 隐藏重连加载动画
-                if (reconnectingOverlay) {
-                    reconnectingOverlay.classList.remove('active');
-                }
-                return;
-            }
-
-            // 在重连之前获取最新消息
-            if (this.lastMessageTime) {
-                try {
-                    const response = await fetch('https://api.homingai.com/ha/home/message', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${this.access_token}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            page_no: 1,
-                            page_size: 20,
-                            since_time: this.lastMessageTime
-                        })
-                    });
-
-                    if (response.ok) {
-                        const result = await response.json();
-                        if (result.code === 200 && result.data.data) {
-                            const messages = result.data.data;
-                            const messagesContainer = this.shadowRoot.getElementById('messages');
-
-                            messages.forEach(msg => {
-                                const messageElement = this.createMessageElement({
-                                    type: msg.message_type === 1 ? 'user' : 'bot',
-                                    content: msg.content,
-                                    timestamp: msg.created_at,
-                                    showUserName: msg.message_type === 1,
-                                    userName: msg.user_name
-                                });
-                                messagesContainer.appendChild(messageElement);
-                            });
-
-                            if (messages.length > 0) {
-                                messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                            }
-                        }
-                    }
-                } catch (error) {
-                    console.error('Failed to fetch recent messages:', error);
-                }
-            }
-
-            this.initWebSocket();
-        }, delay);
-    }
 
     // 添加 shouldLoadMore 方法
     shouldLoadMore(container) {
@@ -2318,7 +2216,7 @@ class HomingAIChat extends HTMLElement {
 
     // 添加网络状态处理方法
     handleOnline() {
-        this.handleWebSocketReconnect();
+        this.initWebSocket();
     }
 
     handleOffline() {
