@@ -317,6 +317,11 @@ class HomingAIChat extends HTMLElement {
                     this.initializationPromise = this.loadHistoryMessages(true);
                 }
                 await this.initializationPromise;
+
+                // 触发连接成功的回调
+                if (this.onWebSocketOpen) {
+                    this.onWebSocketOpen();
+                }
             };
 
             this.ws.onclose = (event) => {
@@ -1679,9 +1684,26 @@ class HomingAIChat extends HTMLElement {
     // 修改 sendChatMessage 方法
     async sendChatMessage(message, needTTS = false) {
         try {
+            // 如果 WebSocket 未连接或已断开，等待重连
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-                this.initWebSocket();
-                return;
+                // 等待 WebSocket 重连
+                await new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => {
+                        reject(new Error('WebSocket 连接超时'));
+                    }, 5000); // 5秒超时
+
+                    const checkConnection = () => {
+                        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                            clearTimeout(timeout);
+                            resolve();
+                        } else {
+                            this.initWebSocket();
+                            setTimeout(checkConnection, 500);
+                        }
+                    };
+                    
+                    checkConnection();
+                });
             }
 
             const chatResponse = await fetch('https://api.homingai.com/ha/home/chat', {
