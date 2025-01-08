@@ -323,6 +323,10 @@ class HomingAIChat extends HTMLElement {
                 this.addMessage('连接已断开', 'bot');
                 // 连接关闭时显示重连动画
                 reconnectingOverlay.classList.add('active');
+                // 5秒后尝试重连
+                setTimeout(() => {
+                    reconnectingOverlay.classList.remove('active');
+                }, 5000);
             };
 
             // 保持原有的消息处理逻辑
@@ -360,7 +364,7 @@ class HomingAIChat extends HTMLElement {
             this.ws.onerror = (error) => {
                 this.addMessage('连接发生错误', 'bot');
                 // 连接错误时显示重连动画
-                reconnectingOverlay.classList.add('active');
+                reconnectingOverlay.classList.remove('active');
             };
 
         } catch (error) {
