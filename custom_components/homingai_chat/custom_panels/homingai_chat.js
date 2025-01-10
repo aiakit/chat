@@ -305,7 +305,7 @@ class HomingAIChat extends HTMLElement {
 
             // 添加网络状态监听
             window.addEventListener('online', this.handleOnline.bind(this));
-            window.addEventListener('offline', this.handleOffline.bind(this));
+            // window.addEventListener('offline', this.handleOffline.bind(this));
 
             // 修改事件处理逻辑
             this.ws.onopen = async () => {
@@ -325,7 +325,6 @@ class HomingAIChat extends HTMLElement {
             };
 
             this.ws.onclose = (event) => {
-                this.addMessage('连接已断开', 'bot');
                 // 连接关闭时显示重连动画
                 reconnectingOverlay.classList.add('active');
                 // 5秒后尝试重连
@@ -367,13 +366,11 @@ class HomingAIChat extends HTMLElement {
             };
 
             this.ws.onerror = (error) => {
-                this.addMessage('连接发生错误', 'bot');
                 // 连接错误时显示重连动画
                 reconnectingOverlay.classList.remove('active');
             };
 
         } catch (error) {
-            this.addMessage('连接失败: ' + error.message, 'bot');
             // 连接失败时隐藏重连动画
             reconnectingOverlay.classList.remove('active');
         }
@@ -1756,7 +1753,7 @@ class HomingAIChat extends HTMLElement {
                                     type: 'audio/wav; codecs=1'
                                 });
                                 const audioUrl = URL.createObjectURL(audioBlob);
-                                
+
                                 await this.playAudio(audioUrl);
                             } catch (error) {
                                 this.addMessage('音频处理失败: ' + error.message, 'bot');
@@ -1811,50 +1808,76 @@ class HomingAIChat extends HTMLElement {
         }
     }
 
-    // 修改 playAudio 方法
     playAudio(audioUrl) {
-        // 先停止当前正在播放的音频
-        this.stopCurrentAudio();
+        try {
+            // 先停止当前正在播放的音频
+            this.stopCurrentAudio();
 
-        const audio = new Audio();
-        this.currentAudio = audio;
+            const audio = new Audio();
+            this.currentAudio = audio;
 
-        // 设置音频属性
-        audio.preload = 'auto';
-        audio.playsinline = true;
-        audio.setAttribute('webkit-playsinline', 'true');
-        audio.setAttribute('x-webkit-airplay', 'allow');
-        
-        // 设置较高的播放优先级
-        if (window.AudioContext) {
-            const audioContext = new AudioContext();
-            const source = audioContext.createMediaElementSource(audio);
-            source.connect(audioContext.destination);
-        }
+            // 设置音频属性
+            audio.preload = 'auto';
+            audio.playsinline = true;
+            audio.setAttribute('webkit-playsinline', 'true');
+            audio.setAttribute('x-webkit-airplay', 'allow');
+            
+            // 使用类级别的 AudioContext 而不是每次都创建新的
+            if (!this.audioContext && window.AudioContext) {
+                this.audioContext = new AudioContext();
+            }
 
-        // 添加音频事件监听器
-        audio.addEventListener('error', (e) => {
-            URL.revokeObjectURL(audioUrl);
-            this.currentAudio = null;
-        });
+            if (this.audioContext && this.audioContext.state === 'suspended') {
+                this.audioContext.resume();
+            }
 
-        audio.addEventListener('ended', () => {
-            URL.revokeObjectURL(audioUrl);
-            this.currentAudio = null;
-        });
+            // 只在需要时创建和连接音频源
+            if (this.audioContext && !this.currentSource) {
+                this.currentSource = this.audioContext.createMediaElementSource(audio);
+                this.currentSource.connect(this.audioContext.destination);
+            }
 
-        // iOS Safari 需要设置这些属性
-        audio.setAttribute('playsinline', 'true');
-        audio.setAttribute('webkit-playsinline', 'true');
-        audio.preload = 'auto';
-        audio.src = audioUrl;
-
-        const playPromise = audio.play();
-        if (playPromise !== undefined) {
-            playPromise.catch(error => {
+            // 添加音频事件监听器
+            audio.addEventListener('error', (e) => {
                 URL.revokeObjectURL(audioUrl);
                 this.currentAudio = null;
             });
+
+            audio.addEventListener('ended', () => {
+                URL.revokeObjectURL(audioUrl);
+                this.currentAudio = null;
+                // 清理音频源
+                if (this.currentSource) {
+                    this.currentSource.disconnect();
+                    this.currentSource = null;
+                }
+            });
+
+            // iOS Safari 需要设置这些属性
+            audio.setAttribute('playsinline', 'true');
+            audio.setAttribute('webkit-playsinline', 'true');
+            audio.preload = 'auto';
+            audio.src = audioUrl;
+
+            const playPromise = audio.play();
+            if (playPromise !== undefined) {
+                playPromise.catch(error => {
+                    URL.revokeObjectURL(audioUrl);
+                    this.currentAudio = null;
+                    // 清理音频源
+                    if (this.currentSource) {
+                        this.currentSource.disconnect();
+                        this.currentSource = null;
+                    }
+                });
+            }
+        } catch (error) {
+            URL.revokeObjectURL(audioUrl);
+            this.currentAudio = null;
+            if (this.currentSource) {
+                this.currentSource.disconnect();
+                this.currentSource = null;
+            }
         }
     }
 
@@ -1865,20 +1888,22 @@ class HomingAIChat extends HTMLElement {
                 this.currentAudio.pause();
                 this.currentAudio.currentTime = 0;
                 const currentSrc = this.currentAudio.src;
-                this.currentAudio.src = ''; // 清除源
-                this.currentAudio.load(); // 重置音频元素
+                this.currentAudio.src = '';
+                this.currentAudio.load();
                 if (currentSrc.startsWith('blob:')) {
-                    URL.revokeObjectURL(currentSrc); // 释放blob URL
+                    URL.revokeObjectURL(currentSrc);
+                }
+                
+                // 清理音频源
+                if (this.currentSource) {
+                    this.currentSource.disconnect();
+                    this.currentSource = null;
                 }
             } catch (error) {
                 console.warn('Error stopping audio:', error);
             }
             this.currentAudio = null;
         }
-
-        // 重置所有音频相关状态
-        this.audioQueue = [];
-        this.isProcessing = false;
     }
 
     // 添加音频转换辅助方法
@@ -2161,9 +2186,6 @@ class HomingAIChat extends HTMLElement {
         this.initWebSocket();
     }
 
-    handleOffline() {
-        this.addMessage('网络连接已断开，请检查网络设置', 'bot');
-    }
 }
 // 注册自定义元素
 if (!customElements.get('homingai-chat')) {
